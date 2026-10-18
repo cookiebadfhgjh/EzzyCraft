@@ -6991,10 +6991,23 @@ function guestHandle(d) {
       {
         const sender = cleanName(d.n) || '?';
         const message = String(d.m || '').slice(0, 120);
+        const senderRemote = [...remotePlayers.values()].find(other => other.name === sender);
         dispatchCustomPackEvent('onChat', {
           type: 'chat', message, sender,
-          senderPlayer: [...remotePlayers.values()].find(other => other.name === sender) ||
-            (sender === NET.name ? { id: NET.selfId, name: NET.name, health } : null),
+          senderPlayer: senderRemote
+            ? {
+              id: senderRemote.id, name: senderRemote.name,
+              position: { x: senderRemote.tx, y: senderRemote.ty, z: senderRemote.tz },
+              health: senderRemote.health, dead: senderRemote.dead,
+              yaw: senderRemote.tyaw, pitch: senderRemote.tpitch,
+            }
+            : sender === NET.name
+              ? {
+                id: NET.selfId, name: NET.name,
+                position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+                health, dead: health <= 0, yaw, pitch,
+              }
+              : null,
         });
         chatLine(sender, message);
       }
