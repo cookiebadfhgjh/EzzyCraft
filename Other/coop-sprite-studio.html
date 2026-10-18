@@ -49,7 +49,7 @@
 <body>
 <header>
   <h1>Co-op Sprite Studio</h1>
-  <p>Draw pixel sprites, configure item or block mechanics, add JavaScript features, and export one definition or a multi-item pack.</p>
+  <p>Draw pixel sprites, configure item or block properties, write unique mechanics and reusable JavaScript services, and export one definition or a multi-item pack.</p>
 </header>
 <main>
   <section>
@@ -163,14 +163,18 @@
       </div>
     </div>
     <h3>Unique mechanics</h3>
-    <label for="mechanics">Describe behavior
-      <textarea id="mechanics" spellcheck="false" placeholder="Describe this item's unique behavior."></textarea>
+    <label for="mechanics-notes">Behavior notes (informational)
+      <textarea id="mechanics-notes" spellcheck="false" placeholder="Optional explanation for players or pack maintainers."></textarea>
     </label>
-    <h3>JavaScript feature module</h3>
-    <label for="feature-script">Module object (optional)
-      <textarea id="feature-script" spellcheck="false" placeholder="{&#10;  onUse(api, event) {&#10;    api.effects.playSound('pickup');&#10;  },&#10;  onHit(api, event) {&#10;    return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };&#10;  }&#10;}"></textarea>
+    <label for="mechanics">Unique behavior module
+      <textarea id="mechanics" spellcheck="false" placeholder="({&#10;  onUse(api, event) {&#10;    api.effects.playSound('pickup');&#10;  },&#10;  onHit(api, event) {&#10;    return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };&#10;  }&#10;})"></textarea>
     </label>
-    <p class="hint">Define optional onUse, onHit, onBlockBreak, onBlockPlace, and onTick functions. Scripts are shared with the definition, but each player must explicitly enable them in-game. Hooks run in a restricted worker and can only use the game API (inventory, world, player, combat, and effects).</p>
+    <p class="hint">Unique behavior is the item's own JavaScript hook module. Hooks include onUse, onHit, onBlockBreak, onBlockPlace, and onTick. They receive the event, player, nearby players, and ray-trace context.</p>
+    <h3>Shared JavaScript services</h3>
+    <label for="feature-script">Reusable services object (optional)
+      <textarea id="feature-script" spellcheck="false" placeholder="({&#10;  burst(api, event, count = 3) {&#10;    api.effects.playSound('pickup');&#10;    return count;&#10;  },&#10;  shoot(api, event, speed = 12) {&#10;    return api.projectiles.launch({ speed });&#10;  }&#10;})"></textarea>
+    </label>
+    <p class="hint">Unique hooks call a service with api.services.burst(count). The active hook's API and event are passed to the service automatically. Services are separated from item behavior so one helper can be reused by every hook on that item. Scripts require player approval; game-changing actions remain validated by the game/server.</p>
     <section class="mesh-box" aria-label="Definition pack">
       <h3 style="margin-top:0">Multi-item pack <span id="pack-count" class="muted">0 items</span></h3>
       <p class="hint">Add the current definition to the pack, then draw and configure the next item. IDs and texture tiles are assigned automatically after each addition.</p>
@@ -270,10 +274,13 @@
   $('download-js').addEventListener('click', () => {
     try {
       const def = makeDefinition();
-      const featureExport = def.features
-        ? '\n\nconst customFeatures = ' + def.features.source + ';\n'
+      const uniqueExport = def.mechanics.unique
+        ? '\n\nconst uniqueMechanics = ' + def.mechanics.unique + ';\n'
         : '';
-      downloadBlob(new Blob([def.gameIntegration + featureExport + '\n'], { type: 'text/javascript;charset=utf-8' }), fileBaseName(def.name) + '-integration.js');
+      const serviceExport = def.features && def.features.services
+        ? '\nconst sharedServices = ' + def.features.services + ';\n'
+        : '';
+      downloadBlob(new Blob([def.gameIntegration + uniqueExport + serviceExport + '\n'], { type: 'text/javascript;charset=utf-8' }), fileBaseName(def.name) + '-integration.js');
       $('message').textContent = 'Game integration JavaScript exported.';
     } catch (error) {
       $('message').textContent = 'Export failed: ' + error.message;
@@ -503,8 +510,8 @@
         lines.push('// Current getBreakTime() only applies tool speed to pickaxes; add the other tool types to its matching rule to use this speed.');
       }
     }
-    if (definition.features && definition.features.source) {
-      lines.push('// Store this definition.features object in customDefinitionsById and invoke its hooks through the restricted custom-feature runtime.');
+    if (definition.mechanics.unique || (definition.features && definition.features.services)) {
+      lines.push('// Unique behavior is in mechanics.unique; reusable helper functions are in features.services.');
     }
     return lines.join('\n');
   }
@@ -540,7 +547,8 @@
       },
       mechanics: {
         unique: mechanics,
-        hookContract: 'Optional executable features are stored in features.source and run through the game custom-feature API after the player enables them.',
+        description: $('mechanics-notes').value.trim(),
+        uniqueRuntime: 'coop1.10.javascript-feature.v2',
       },
       recipe,
     };
@@ -589,12 +597,11 @@
     }
     const featureSource = $('feature-script').value.trim();
     if (featureSource) {
-      if (featureSource.length > 65536) throw new Error('JavaScript feature modules must be 64 KB or smaller.');
+      if (featureSource.length > 262144) throw new Error('Shared JavaScript services must be 256 KB or smaller.');
       common.features = {
-        runtime: 'coop1.10.javascript-feature.v1',
-        events: ['onUse', 'onHit', 'onBlockBreak', 'onBlockPlace', 'onTick'],
+        runtime: 'coop1.10.javascript-services.v1',
         capabilities: ['combat', 'inventory', 'world', 'player', 'effects'],
-        source: featureSource,
+        services: featureSource,
       };
     }
     if (mesh) {
@@ -871,7 +878,16 @@
       $('registry-key').dataset.edited = 'true';
       $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
       $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
-      $('mechanics').value = definition.mechanics && definition.mechanics.unique || '';
+      const oldFeatureHooks = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
+        ? definition.features.source || ''
+        : '';
+      $('mechanics-notes').value = definition.mechanics &&
+        (definition.mechanics.description || (definition.mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2'
+          ? definition.mechanics.unique
+          : '')) || '';
+      $('mechanics').value = definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+        ? definition.mechanics.unique || ''
+        : oldFeatureHooks;
       if (definition.kind === 'tool') {
         const b = definition.base || {};
         $('damage').value = String(b.damage ?? 4);
@@ -938,8 +954,9 @@
       }
       render();
       $('message').textContent = 'Definition imported into the editor.';
-      $('feature-script').value = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
-        ? definition.features.source || ''
+      $('feature-script').value = definition.features &&
+        (definition.features.runtime === 'coop1.10.javascript-services.v1' || definition.features.runtime === 'coop1.10.javascript-feature.v1')
+        ? definition.features.services || ''
         : '';
       renderPack();
       updateDefinitionPreview();

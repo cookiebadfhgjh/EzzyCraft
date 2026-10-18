@@ -3726,6 +3726,13 @@ document.addEventListener('mousedown', e => {
     const sneaking = keys['ControlLeft'] || keys['ControlRight'];
     if (target && target.type === 'block') {
       const tid = getBlock(target.x, target.y, target.z);
+      const blockDefinition = customDefinitionsById.get(tid);
+      if (blockDefinition && blockDefinition.kind === 'block') {
+        void runCustomFeatureHook(blockDefinition, 'onBlockUse', {
+          type: 'block-use', id: tid, position: { x: target.x, y: target.y, z: target.z },
+          face: { x: target.nx, y: target.ny, z: target.nz },
+        });
+      }
       if (tid === CRAFTING_TABLE && !sneaking) { openCraftingTable(); return; }
       if (tid === FURNACE && !sneaking) { openFurnace(target); return; }
       const stack = hotbar[selected];
@@ -3928,8 +3935,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
       preparedDefinitions.push(prepared);
     }
     const approved = approveCustomFeatureScripts(preparedDefinitions.map(prepared => prepared.definition));
-    const containsScripts = preparedDefinitions.some(prepared =>
-      prepared.definition.features && prepared.definition.features.source);
+    const containsScripts = preparedDefinitions.some(prepared => hasCustomFeatureCode(prepared.definition));
     let imported = 0;
     let grantWarning = '';
     for (const prepared of preparedDefinitions) {
@@ -3967,7 +3973,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
     renderHotbar();
     if (inventoryOpen) renderInventory();
     toast(imported + (imported === 1 ? ' definition imported.' : ' definitions imported.') +
-      (containsScripts ? (approved ? ' JavaScript features enabled.' : ' JavaScript features were left disabled.') : '') +
+      (containsScripts ? (approved ? ' JavaScript mechanics enabled.' : ' JavaScript mechanics were left disabled.') : '') +
       grantWarning);
   } catch (error) {
     console.error('Could not import item definition:', error);
@@ -4600,7 +4606,7 @@ document.getElementById('btn-save-quit').onclick = async () => {
   hideLoading();
   stopNet();
   currentWorld = null;
-  clearAllChunks(); clearDrops(); clearParticles(); clearFishes(); clearFluidState();
+  clearAllChunks(); clearDrops(); clearCustomProjectiles(); clearParticles(); clearFishes(); clearFluidState();
   chunkData.clear(); generatedChunks.clear(); dirtyChunks.clear(); invalidateBlockCache();
   setMenuState('title');
   if (sizeKB) toast(`Saved (${sizeKB.toFixed(1)} KB)`);
@@ -4627,7 +4633,7 @@ document.getElementById('btn-death-quit').onclick = async () => {
   if (currentWorld) { try { await persistWorld(currentWorld, true, true); } catch (e) {} }
   stopNet();
   currentWorld = null;
-  clearAllChunks(); clearDrops(); clearParticles(); clearFishes(); clearFluidState();
+  clearAllChunks(); clearDrops(); clearCustomProjectiles(); clearParticles(); clearFishes(); clearFluidState();
   chunkData.clear(); generatedChunks.clear(); dirtyChunks.clear(); invalidateBlockCache();
   setMenuState('title');
 };
@@ -4714,14 +4720,35 @@ const customFeatureActionBudgets = new Map();
 const sessionCustomFeatureApprovals = new Map();
 const failedCustomFeatureHashes = new Map();
 let customFeatureHealthEffectAt = -Infinity;
+let customFeaturePermissionNoticeAt = -Infinity;
 let customFeatureCallId = 0;
-function customFeatureHash(source) {
+function customFeatureHash(source, services = '') {
   let hash = 2166136261;
-  for (let i = 0; i < source.length; i++) {
-    hash ^= source.charCodeAt(i);
+  const combined = source + '\u0000' + services;
+  for (let i = 0; i < combined.length; i++) {
+    hash ^= combined.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+function customUniqueSource(definition) {
+  if (definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2') {
+    return definition.mechanics.unique || '';
+  }
+  return definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
+    ? definition.features.source || ''
+    : '';
+}
+function customServicesSource(definition) {
+  return definition.features && definition.features.runtime === 'coop1.10.javascript-services.v1'
+    ? definition.features.services || ''
+    : '';
+}
+function customFeatureHashForDefinition(definition) {
+  return customFeatureHash(customUniqueSource(definition), customServicesSource(definition));
+}
+function hasCustomFeatureCode(definition) {
+  return Boolean(customUniqueSource(definition).trim() || customServicesSource(definition).trim());
 }
 function customFeatureApprovals() {
   const stored = localStorage.getItem(CUSTOM_FEATURE_APPROVALS_KEY);
@@ -4733,8 +4760,7 @@ function customFeatureApprovals() {
   return approvals;
 }
 function approveCustomFeatureScripts(definitions) {
-  const scripted = definitions.filter(definition =>
-    definition.features && typeof definition.features.source === 'string' && definition.features.source.trim());
+  const scripted = definitions.filter(hasCustomFeatureCode);
   if (!scripted.length) return true;
   let approvals = {};
   try {
@@ -4744,16 +4770,16 @@ function approveCustomFeatureScripts(definitions) {
     toast('JavaScript features cannot be remembered by this browser; enabling them for this session only.', true);
   }
   const pending = scripted.filter(definition =>
-    approvals[definition.registry.id] !== customFeatureHash(definition.features.source));
+    approvals[definition.registry.id] !== customFeatureHashForDefinition(definition));
   if (!pending.length) return true;
   const itemList = pending.map(definition => definition.name).join(', ');
   if (!window.confirm(
-    'This definition contains JavaScript features: ' + itemList +
-    '. Enable them? Scripts run in a restricted worker without access to the game page or network. ' +
-    'Their game actions are limited to the built-in item API.')) return false;
+    'This definition contains unique JavaScript mechanics or shared services: ' + itemList +
+    '. Enable them? Code runs in an isolated worker without access to the game page or network. ' +
+    'Game-changing actions are checked by the game and server.')) return false;
   for (const definition of pending) {
-    approvals[definition.registry.id] = customFeatureHash(definition.features.source);
-    sessionCustomFeatureApprovals.set(definition.registry.id, customFeatureHash(definition.features.source));
+    approvals[definition.registry.id] = customFeatureHashForDefinition(definition);
+    sessionCustomFeatureApprovals.set(definition.registry.id, customFeatureHashForDefinition(definition));
   }
   try {
     localStorage.setItem(CUSTOM_FEATURE_APPROVALS_KEY, JSON.stringify(approvals));
@@ -4763,10 +4789,11 @@ function approveCustomFeatureScripts(definitions) {
   return true;
 }
 function customFeatureApproved(definition) {
-  if (!definition.features || !definition.features.source) return false;
-  if (sessionCustomFeatureApprovals.get(definition.registry.id) === customFeatureHash(definition.features.source)) return true;
+  if (!hasCustomFeatureCode(definition)) return false;
+  const hash = customFeatureHashForDefinition(definition);
+  if (sessionCustomFeatureApprovals.get(definition.registry.id) === hash) return true;
   try {
-    return customFeatureApprovals()[definition.registry.id] === customFeatureHash(definition.features.source);
+    return customFeatureApprovals()[definition.registry.id] === hash;
   } catch (error) {
     console.error('Could not read JavaScript feature approvals:', error);
     return false;
@@ -4785,10 +4812,11 @@ function disposeCustomFeatureRunner(id, reason = 'JavaScript feature worker was 
 }
 function createCustomFeatureRunner(definition) {
   const id = definition.registry.id;
-  const source = definition.features.source;
-  const hash = customFeatureHash(source);
+  const source = customUniqueSource(definition);
+  const services = customServicesSource(definition);
+  const hash = customFeatureHashForDefinition(definition);
   if (failedCustomFeatureHashes.get(id) === hash) {
-    throw new Error('This JavaScript feature module was disabled after an earlier error.');
+    throw new Error('This JavaScript mechanics module was disabled after an earlier error.');
   }
   const existing = customFeatureRunners.get(id);
   if (existing && existing.hash === hash) return existing;
@@ -4798,7 +4826,7 @@ function createCustomFeatureRunner(definition) {
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.title = 'Isolated custom item feature worker';
   const workerBootstrap = `
-    let handlers, allowed, itemId;
+    let handlers, services, allowed, itemId;
     self.onmessage = async event => {
       const data = event.data;
       if (data.type === 'init') {
@@ -4808,20 +4836,27 @@ function createCustomFeatureRunner(definition) {
           try { Object.defineProperty(globalThis, name, { value: undefined, writable: false, configurable: false }); } catch {}
         }
         try {
-          handlers = new Function('"use strict"; return (' + data.source + ');')();
-          if (!handlers || typeof handlers !== 'object') throw new Error('Module must evaluate to an object of hooks.');
+          handlers = data.source ? new Function('"use strict"; return (' + data.source + ');')() : {};
+          services = data.services ? new Function('"use strict"; return (' + data.services + ');')() : {};
+          if (!handlers || typeof handlers !== 'object' || Array.isArray(handlers)) throw new Error('Unique mechanics must evaluate to an object of hooks.');
+          if (!services || typeof services !== 'object' || Array.isArray(services)) throw new Error('Shared services must evaluate to an object of functions.');
+          for (const [name, service] of Object.entries(services)) {
+            if (!/^[a-zA-Z_$][\\w$]*$/.test(name) || typeof service !== 'function') {
+              throw new Error('Each shared service must be a named function.');
+            }
+          }
           postMessage({ type: 'ready', id: itemId });
         } catch (error) {
           postMessage({ type: 'error', id: itemId, message: error.message || String(error) });
         }
         return;
       }
-      if (!handlers || !allowed.includes(data.hook)) return;
+      if (!handlers || !allowed.includes(data.hook) || typeof handlers[data.hook] !== 'function') return;
       const actions = [];
       const push = (capability, type, args) => {
-        if (data.capabilities.includes(capability) && actions.length < 32) actions.push({ type, args });
+        if (data.capabilities.includes(capability) && actions.length < 128) actions.push({ type, args });
       };
-      const api = Object.freeze({
+      const api = {
         combat: Object.freeze({
           modifyHit: (damageMultiplier = 1, knockbackMultiplier = 1) =>
             data.capabilities.includes('combat') ? { damageMultiplier, knockbackMultiplier } : null,
@@ -4830,6 +4865,19 @@ function createCustomFeatureRunner(definition) {
         world: Object.freeze({
           setBlock: (x, y, z, id) => push('world', 'setBlock', [x, y, z, id]),
           spawnDrop: (x, y, z, id, count = 1) => push('world', 'spawnDrop', [x, y, z, id, count]),
+          setTime: hours => push('world', 'setTime', [hours]),
+          time: data.context.world.time,
+          raycast: (maxDistance = 8) => {
+            const hit = data.context.raycast;
+            return Number.isFinite(maxDistance) && maxDistance >= 0 && hit && hit.distance <= maxDistance ? hit : null;
+          },
+        }),
+        players: Object.freeze({
+          list: () => data.context.players,
+          get: id => data.context.players.find(other => other.id === id) || null,
+        }),
+        projectiles: Object.freeze({
+          launch: options => push('world', 'launchProjectile', [options || {}]),
         }),
         player: Object.freeze({
           heal: amount => push('player', 'heal', [amount]),
@@ -4840,7 +4888,10 @@ function createCustomFeatureRunner(definition) {
           playSound: name => push('effects', 'playSound', [name]),
           particle: (name, x, y, z) => push('effects', 'particle', [name, x, y, z]),
         }),
-      });
+      };
+      api.services = Object.freeze(Object.fromEntries(Object.entries(services).map(([name, service]) =>
+        [name, (...args) => service(api, data.context, ...args)])));
+      Object.freeze(api);
       try {
         const hook = handlers[data.hook];
         const result = typeof hook === 'function' ? await hook(api, data.context) : null;
@@ -4861,19 +4912,20 @@ function createCustomFeatureRunner(definition) {
     'if(message.type==="ready"){workerReady=true;for(const call of queued.splice(0))worker.postMessage(call)}' +
     'else if(message.type==="result"||message.type==="error"){workerReady=false;worker.terminate();worker=null}};' +
     'worker.onerror=event=>{parent.postMessage({channel:"coop-feature",id:config.id,message:{type:"error",message:event.message||"Worker failed"}},"*");workerReady=false;worker.terminate();worker=null};' +
-    'worker.postMessage({type:"init",id:config.id,source:config.source,events:config.events})}' +
+    'worker.postMessage({type:"init",id:config.id,source:config.source,services:config.services,events:config.events})}' +
     'addEventListener("message",event=>{if(event.source!==parent)return;const data=event.data;if(data.type==="init"){config=data;startWorker()}' +
     'else if(worker&&workerReady)worker.postMessage(data);else{queued.push(data);if(!worker)startWorker()}});</scr'+'ipt>';
   const runner = {
     id, hash, frame, ready: false, failed: null, pending: new Map(), queue: [],
-    events: definition.features.events,
+    events: definition.features.events ||
+      ['onUse', 'onHit', 'onBlockUse', 'onBlockBreak', 'onBlockPlace', 'onTick', 'onProjectileHit'],
     capabilities: definition.features.capabilities,
   };
   customFeatureRunners.set(id, runner);
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({
-      type: 'init', id, source,
-      events: definition.features.events,
+      type: 'init', id, source, services,
+      events: runner.events,
       capabilities: definition.features.capabilities,
     }, '*');
   }, { once: true });
@@ -4914,9 +4966,9 @@ window.addEventListener('message', event => {
   pending.resolve({ result: response.result, actions: Array.isArray(response.actions) ? response.actions : [] });
 });
 function callCustomFeatureHook(definition, hook, context) {
-  if (!definition.features || !definition.features.events.includes(hook) ||
-      !customFeatureApproved(definition)) return Promise.resolve(null);
-  if (failedCustomFeatureHashes.get(definition.registry.id) === customFeatureHash(definition.features.source)) {
+  if (!customUniqueSource(definition).trim() ||
+      !hasCustomFeatureCode(definition) || !customFeatureApproved(definition)) return Promise.resolve(null);
+  if (failedCustomFeatureHashes.get(definition.registry.id) === customFeatureHashForDefinition(definition)) {
     return Promise.resolve(null);
   }
   const runner = createCustomFeatureRunner(definition);
@@ -4927,8 +4979,8 @@ function callCustomFeatureHook(definition, hook, context) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       failedCustomFeatureHashes.set(definition.registry.id, runner.hash);
-      disposeCustomFeatureRunner(definition.registry.id, 'JavaScript feature hook exceeded its 500 ms time limit.');
-    }, 500);
+      disposeCustomFeatureRunner(definition.registry.id, 'JavaScript feature hook exceeded its 2 second time limit.');
+    }, 2000);
     runner.pending.set(id, { resolve, reject, timeout });
     if (runner.ready) runner.frame.contentWindow.postMessage(call, '*');
     else runner.queue.push(call);
@@ -4937,15 +4989,15 @@ function callCustomFeatureHook(definition, hook, context) {
 function applyCustomFeatureActions(definition, actions) {
   const capabilities = new Set(definition.features && definition.features.capabilities || []);
   const validPosition = (x, y, z) => [x, y, z].every(Number.isFinite) &&
-    Math.abs(x - player.pos.x) <= 8 && Math.abs(y - player.pos.y) <= 8 && Math.abs(z - player.pos.z) <= 8;
+    Math.abs(x - player.pos.x) <= 64 && Math.abs(y - player.pos.y) <= 64 && Math.abs(z - player.pos.z) <= 64;
   const now = performance.now();
   let budget = customFeatureActionBudgets.get(definition.registry.id);
   if (!budget || now - budget.startedAt >= 1000) {
     budget = { startedAt: now, actions: 0, drops: 0 };
     customFeatureActionBudgets.set(definition.registry.id, budget);
   }
-  for (const action of actions.slice(0, 32)) {
-    if (budget.actions >= 32) break;
+  for (const action of actions.slice(0, 128)) {
+    if (budget.actions >= 128) break;
     budget.actions++;
     if (!action || !Array.isArray(action.args)) continue;
     const [a, b, c, d, e] = action.args;
@@ -4968,10 +5020,28 @@ function applyCustomFeatureActions(definition, actions) {
         break;
       case 'spawnDrop':
         if (!capabilities.has('world') || !validPosition(a, b, c) ||
+            !inBounds2(Math.floor(a), Math.floor(b), Math.floor(c)) ||
             !Number.isInteger(d) || !BLOCK_TYPES[d] || !Number.isInteger(e) || e < 1 ||
-            e > 64 || budget.drops + e > 32) break;
+            e > 64 || budget.drops + e > 128) break;
         budget.drops += e;
         spawnDrop(a, b, c, d, e);
+        break;
+      case 'launchProjectile':
+        if (!capabilities.has('world') || !a || typeof a !== 'object' || Array.isArray(a)) break;
+        spawnCustomProjectile(definition, a);
+        break;
+      case 'setTime':
+        if (!capabilities.has('world') || !Number.isFinite(a) || a < 0 || a >= 24) break;
+        if (!NET.role) {
+          worldTime = a / 24;
+        } else if (NET.isOp && NET.hostConn && NET.hostConn.open) {
+          NET.hostConn.send({ t: 'pvp-time', time: a });
+        } else {
+          if (performance.now() - customFeaturePermissionNoticeAt >= 3000) {
+            customFeaturePermissionNoticeAt = performance.now();
+            toast('Only server operators can change the shared world time.', true);
+          }
+        }
         break;
       case 'heal':
         if (!capabilities.has('player') || !Number.isFinite(a) || a <= 0 || a > 20) break;
@@ -5026,13 +5096,33 @@ function applyCustomFeatureActions(definition, actions) {
 }
 async function runCustomFeatureHook(definition, hook, context) {
   try {
+    const actor = {
+      id: NET.selfId,
+      name: NET.name || getPlayerName(),
+      position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+      health,
+      dead: health <= 0,
+      gameMode,
+      isOperator: NET.isOp,
+      yaw,
+      pitch,
+    };
     const response = await callCustomFeatureHook(definition, hook, {
       ...context,
+      ...(context.type === 'block-use' ? { clickedBy: actor } : {}),
       item: { id: definition.registry.id, name: definition.name, kind: definition.kind },
-      player: {
-        position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
-        health, gameMode,
-      },
+      player: actor,
+      players: [
+        actor,
+        ...[...remotePlayers.values()].map(other => ({
+          id: other.id, name: other.name,
+          position: { x: other.tx, y: other.ty, z: other.tz },
+          health: other.health, dead: other.dead,
+          yaw: other.tyaw, pitch: other.tpitch,
+        })),
+      ],
+      world: { time: worldTime * 24 },
+      raycast: getCustomRaycast(32),
     });
     if (!response) return null;
     applyCustomFeatureActions(definition, response.actions);
@@ -5042,6 +5132,119 @@ async function runCustomFeatureHook(definition, hook, context) {
     toast('JavaScript features for ' + definition.name + ' were disabled: ' + error.message, true);
     return null;
   }
+}
+const customProjectiles = [];
+const customProjectileGeometry = new THREE.SphereGeometry(0.12, 8, 6);
+const customProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffd35a });
+function spawnCustomProjectile(definition, options) {
+  if (customProjectiles.length >= 128) return;
+  const speed = Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
+  const lifetime = Number.isFinite(options.lifetime) ? Math.max(0.1, Math.min(30, options.lifetime)) : 5;
+  const origin = camera.position.clone();
+  const direction = new THREE.Vector3();
+  if (options.direction && [options.direction.x, options.direction.y, options.direction.z].every(Number.isFinite)) {
+    direction.set(options.direction.x, options.direction.y, options.direction.z);
+  } else {
+    camera.getWorldDirection(direction);
+  }
+  if (direction.lengthSq() < 1e-8) return;
+  direction.normalize();
+  if (options.origin && [options.origin.x, options.origin.y, options.origin.z].every(Number.isFinite)) {
+    const requested = new THREE.Vector3(options.origin.x, options.origin.y, options.origin.z);
+    if (requested.distanceTo(origin) <= 8) origin.copy(requested);
+  }
+  const mesh = new THREE.Mesh(customProjectileGeometry, customProjectileMaterial);
+  mesh.position.copy(origin);
+  scene.add(mesh);
+  customProjectiles.push({
+    definition, mesh, position: origin, direction, speed, lifetime, age: 0,
+    damage: Number.isFinite(options.damage) ? Math.max(0, Math.min(20, options.damage)) : 0,
+  });
+}
+function removeCustomProjectile(index) {
+  const [projectile] = customProjectiles.splice(index, 1);
+  if (projectile) scene.remove(projectile.mesh);
+}
+function clearCustomProjectiles() {
+  for (const projectile of customProjectiles) scene.remove(projectile.mesh);
+  customProjectiles.length = 0;
+}
+function updateCustomProjectiles(dt) {
+  for (let i = customProjectiles.length - 1; i >= 0; i--) {
+    const projectile = customProjectiles[i];
+    projectile.age += dt;
+    if (projectile.age >= projectile.lifetime) {
+      removeCustomProjectile(i);
+      continue;
+    }
+    const step = Math.min(2, projectile.speed * dt);
+    const hit = raycastVoxel(projectile.position, projectile.direction, step, true);
+    const playerHit = pvpEnabled && NET.role
+      ? findPvpTarget(projectile.position, projectile.direction, Math.min(step, hit ? hit.t : step))
+      : null;
+    if (playerHit && (!hit || playerHit.t < hit.t)) {
+      const other = playerHit.player;
+      const position = {
+        x: projectile.position.x + projectile.direction.x * playerHit.t,
+        y: projectile.position.y + projectile.direction.y * playerHit.t,
+        z: projectile.position.z + projectile.direction.z * playerHit.t,
+      };
+      void runCustomFeatureHook(projectile.definition, 'onProjectileHit', {
+        type: 'projectile-hit',
+        projectile: { damage: projectile.damage, age: projectile.age },
+        hit: { type: 'player', position },
+        attackedPlayer: {
+          id: other.id, name: other.name,
+          position: { x: other.tx, y: other.ty, z: other.tz },
+          health: other.health, dead: other.dead,
+        },
+        position,
+      });
+      removeCustomProjectile(i);
+      continue;
+    }
+    if (hit) {
+      const position = {
+        x: projectile.position.x + projectile.direction.x * hit.t,
+        y: projectile.position.y + projectile.direction.y * hit.t,
+        z: projectile.position.z + projectile.direction.z * hit.t,
+      };
+      void runCustomFeatureHook(projectile.definition, 'onProjectileHit', {
+        type: 'projectile-hit',
+        projectile: { damage: projectile.damage, age: projectile.age },
+        hit: { type: 'block', id: getBlock(hit.x, hit.y, hit.z), position, face: { x: hit.nx, y: hit.ny, z: hit.nz } },
+        position,
+      });
+      removeCustomProjectile(i);
+      continue;
+    }
+    projectile.position.addScaledVector(projectile.direction, step);
+    projectile.mesh.position.copy(projectile.position);
+  }
+}
+function getCustomRaycast(maxDistance) {
+  camera.getWorldDirection(forwardDir);
+  const blockHit = raycastVoxel(camera.position, forwardDir, maxDistance, false);
+  const playerHit = pvpEnabled && NET.role
+    ? findPvpTarget(camera.position, forwardDir, Math.min(maxDistance, blockHit ? blockHit.t : maxDistance))
+    : null;
+  if (playerHit) {
+    const other = playerHit.player;
+    return {
+      type: 'player', distance: playerHit.t,
+      player: {
+        id: other.id, name: other.name,
+        position: { x: other.tx, y: other.ty, z: other.tz },
+        health: other.health, dead: other.dead,
+      },
+    };
+  }
+  if (!blockHit) return null;
+  return {
+    type: 'block', id: getBlock(blockHit.x, blockHit.y, blockHit.z), distance: blockHit.t,
+    position: { x: blockHit.x, y: blockHit.y, z: blockHit.z },
+    face: { x: blockHit.nx, y: blockHit.ny, z: blockHit.nz },
+  };
 }
 function findFreeDefinitionId(kind) {
   const minimum = kind === 'tool' ? 120 : 30;
@@ -5141,17 +5344,59 @@ function validateCustomDefinition(source) {
   if (source.mesh && (source.mesh.mimeType !== 'model/gltf-binary' || typeof source.mesh.base64 !== 'string' || !source.mesh.base64)) {
     throw new Error('Mesh data must be embedded as a binary glTF (.glb).');
   }
-  let features = source.features;
-  if (features !== undefined) {
-    const allowedEvents = ['onUse', 'onHit', 'onBlockBreak', 'onBlockPlace', 'onTick'];
-    const allowedCapabilities = ['combat', 'inventory', 'world', 'player', 'effects'];
-    if (!features || features.runtime !== 'coop1.10.javascript-feature.v1' ||
-        typeof features.source !== 'string' || !features.source.trim() || features.source.length > 65536 ||
-        !Array.isArray(features.events) || features.events.some(event => !allowedEvents.includes(event)) ||
-        !Array.isArray(features.capabilities) || features.capabilities.some(capability => !allowedCapabilities.includes(capability))) {
-      throw new Error('JavaScript feature module is invalid or requests unsupported capabilities.');
+  const allowedCapabilities = ['combat', 'inventory', 'world', 'player', 'effects'];
+  const mechanics = source.mechanics && typeof source.mechanics === 'object' ? { ...source.mechanics } : {};
+  let features = source.features ? { ...source.features } : undefined;
+  if (features && features.runtime === 'coop1.10.javascript-feature.v1') {
+    if (typeof features.source !== 'string' || !features.source.trim() || features.source.length > 262144 ||
+        !Array.isArray(features.events) ||
+        features.events.some(event => !['onUse', 'onHit', 'onBlockBreak', 'onBlockPlace', 'onTick'].includes(event)) ||
+        !Array.isArray(features.capabilities) ||
+        features.capabilities.some(capability => !allowedCapabilities.includes(capability))) {
+      throw new Error('Legacy JavaScript feature module is invalid.');
     }
-    features = { ...features, events: [...new Set(features.events)], capabilities: [...new Set(features.capabilities)] };
+    if (mechanics.unique && mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2') {
+      mechanics.description = mechanics.unique;
+    }
+    mechanics.unique = features.source;
+    mechanics.uniqueRuntime = 'coop1.10.javascript-feature.v2';
+    features = {
+      runtime: 'coop1.10.javascript-services.v1',
+      services: '',
+      events: [...new Set(features.events)],
+      capabilities: features.capabilities,
+    };
+  } else if (features !== undefined) {
+    if (!features || features.runtime !== 'coop1.10.javascript-services.v1' ||
+        typeof features.services !== 'string' || features.services.length > 262144 ||
+        !Array.isArray(features.capabilities) ||
+        features.capabilities.some(capability => !allowedCapabilities.includes(capability)) ||
+        (features.events !== undefined &&
+          (!Array.isArray(features.events) ||
+            features.events.some(event => !['onUse', 'onHit', 'onBlockUse', 'onBlockBreak', 'onBlockPlace', 'onTick', 'onProjectileHit'].includes(event))))) {
+      throw new Error('Shared JavaScript services are invalid or request unsupported capabilities.');
+    }
+    features = { ...features, capabilities: [...new Set(features.capabilities)] };
+    if (features.events) features.events = [...new Set(features.events)];
+  }
+  if (mechanics.uniqueRuntime === undefined && typeof mechanics.unique === 'string' && mechanics.unique.trim()) {
+    mechanics.description = mechanics.description || mechanics.unique;
+    mechanics.unique = '';
+  }
+  if (mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2' &&
+      (typeof mechanics.unique !== 'string' || mechanics.unique.length > 262144)) {
+    throw new Error('Unique mechanics JavaScript must be 256 KB or smaller.');
+  }
+  if (mechanics.uniqueRuntime !== undefined &&
+      mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2') {
+    throw new Error('Unique mechanics runtime is not supported.');
+  }
+  if (mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2' && !features) {
+    features = {
+      runtime: 'coop1.10.javascript-services.v1',
+      services: '',
+      capabilities: allowedCapabilities,
+    };
   }
   let recipe = source.recipe || null;
   if (recipe) {
@@ -5188,6 +5433,7 @@ function validateCustomDefinition(source) {
   }
   const definition = {
     ...source,
+    mechanics,
     schema: 'coop1.10.item-block-definition.v2',
     name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 48) : 'Imported item',
     registry: { ...(source.registry || {}), id, key: source.registry && source.registry.key || ('custom_' + id) },
@@ -5987,6 +6233,7 @@ function serverApiUrl(path, addr) {
 let coopStopping = false;
 const NET = {
   session: 0, role: null, peer: null, code: null, name: 'Player', selfId: null,
+  isOp: false,
   conns: new Map(), hostConn: null, nextId: 1, editLog: null,
   loading: false, queue: [], sendTimer: 0, idleTimer: 0, lastKey: '',
   welcomeResolve: null, welcomeReject: null, editBuf: null, chunksLeft: 0,
@@ -6096,7 +6343,7 @@ function addRemotePlayer(id, name, x, y, z, yw, pt) {
   const av = makeAvatar(id, name);
   av.g.position.set(x, y, z);
   remotePlayers.set(id, Object.assign(av, {
-    id, name, tx: x, ty: y, tz: z, tyaw: yw || 0, tpitch: pt || 0,
+    id, name, tx: x, ty: y, tz: z, tyaw: yw || 0, tpitch: pt || 0, health: MAX_HEALTH,
     yaw: yw || 0, walk: 0, speed: 0, fresh: true, dead: false,
   }));
   return true;
@@ -6299,7 +6546,7 @@ function stopNet() {
   NET.session++;
   const ws = NET.ws;
   NET.role = null; NET.peer = null; NET.code = null; NET.ws = null;
-  NET.selfId = null; pvpEnabled = false; pvpTarget = null; NET.sim = false;
+  NET.selfId = null; NET.isOp = false; pvpEnabled = false; pvpTarget = null; NET.sim = false;
   NET.conns = new Map(); NET.hostConn = null; NET.editLog = null;
   NET.loading = false; NET.queue = []; NET.editBuf = null; NET.chunksLeft = 0;
   NET.welcomeResolve = null; NET.welcomeReject = null; NET.lastKey = '';
@@ -6312,7 +6559,7 @@ function stopNet() {
 }
 function leaveToTitle(msg, isErr) {
   stopNet();
-  clearAllChunks(); clearDrops(); clearParticles(); clearFishes(); clearFluidState();
+  clearAllChunks(); clearDrops(); clearCustomProjectiles(); clearParticles(); clearFishes(); clearFluidState();
   chunkData.clear(); generatedChunks.clear(); dirtyChunks.clear(); invalidateBlockCache();
   currentWorld = null;
   hideLoading();
@@ -6337,6 +6584,11 @@ async function requestPvpAttack(targetId) {
     const result = await runCustomFeatureHook(definition, 'onHit', {
       type: 'player', id: targetId,
       position: target ? { x: target.g.position.x, y: target.g.position.y, z: target.g.position.z } : null,
+      attackedPlayer: target ? {
+        id: target.id, name: target.name,
+        position: { x: target.tx, y: target.ty, z: target.tz },
+        health: target.health, dead: target.dead,
+      } : null,
     });
     if (definition.features.capabilities.includes('combat') && result && typeof result === 'object') {
       if (Number.isFinite(result.damageMultiplier)) damageMultiplier = Math.max(0, Math.min(10, result.damageMultiplier));
@@ -6399,6 +6651,10 @@ function guestOnData(d, sess) {
 }
 function guestHandle(d) {
   switch (d.t) {
+    case 'op':
+      NET.isOp = d.op === true;
+      chatLine('', NET.isOp ? 'You are now a server operator.' : 'Server operator privileges were removed.', true);
+      break;
     case 'definition':
       void installSharedDefinition(d.definition).catch(error => {
         console.error('Could not install a shared server definition:', error);
@@ -6408,6 +6664,11 @@ function guestHandle(d) {
     case 'pvp-mode':
       pvpEnabled = d.enabled === true;
       pvpTarget = null;
+      for (const other of remotePlayers.values()) {
+        other.dead = false;
+        other.health = MAX_HEALTH;
+        other.g.visible = true;
+      }
       chatLine('', 'PvP ' + (pvpEnabled ? 'enabled' : 'disabled'), true);
       if (pvpEnabled && menuState === 'death' && NET.hostConn && NET.hostConn.open) {
         NET.hostConn.send({ t: 'pvp-dead' });
@@ -6456,6 +6717,7 @@ function guestHandle(d) {
         const rp = remotePlayers.get(d.id);
         if (rp) {
           rp.dead = d.dead;
+          if (Number.isInteger(d.health)) rp.health = Math.max(0, Math.min(MAX_HEALTH, d.health));
           rp.g.visible = !d.dead;
         }
       }
@@ -6480,7 +6742,7 @@ function guestHandle(d) {
       } else {
         const rp = remotePlayers.get(d.id);
         if (rp) {
-          rp.dead = false; rp.g.visible = true;
+          rp.dead = false; rp.health = MAX_HEALTH; rp.g.visible = true;
           setRemoteTarget(rp, { x: d.x, y: d.y, z: d.z, yaw: 0, pitch: 0 });
           rp.g.position.set(d.x, d.y, d.z);
         }
@@ -6592,6 +6854,7 @@ async function joinGame(code, name) {
     WORLD_SEED = welcome.seed | 0;
     gameMode = welcome.mode === 'creative' ? 'creative' : 'survival';
     NET.selfId = welcome.id;
+    NET.isOp = welcome.op === true;
     NET.sim = welcome.sim === true;
     pvpEnabled = welcome.pvp === true;
     pvpKnockback = Number.isFinite(welcome.pvpKnockback)
@@ -6660,7 +6923,14 @@ async function joinGame(code, name) {
     for (const p of welcome.players) {
       if (addRemotePlayer(p.id, cleanName(p.name) || 'Player', p.x, p.y, p.z, p.yaw, p.pitch) && p.dead) {
         const rp = remotePlayers.get(p.id);
-        if (rp) { rp.dead = true; rp.g.visible = false; }
+        if (rp) {
+          rp.dead = true;
+          rp.health = Number.isInteger(p.health) ? p.health : 0;
+          rp.g.visible = false;
+        }
+      } else {
+        const rp = remotePlayers.get(p.id);
+        if (rp && Number.isInteger(p.health)) rp.health = p.health;
       }
     }
     NET.loading = false;
@@ -6971,6 +7241,7 @@ function update(dt) {
     } else { player.swimStrokeTimer = 0; player.bubbleTimer = 0; }
 
     updateDrops(dt);
+    updateCustomProjectiles(dt);
     updateFishes(dt);
     updateFurnaces(dt);
 

@@ -171,6 +171,28 @@ func TestPvpDamageIsRateLimitedAndServerAuthoritative(t *testing.T) {
 	}
 }
 
+func TestOnlyOperatorCanChangeSharedWorldTime(t *testing.T) {
+	op := &player{id: 1, op: true, joined: true, send: make(chan []byte, 2)}
+	member := &player{id: 2, joined: true, send: make(chan []byte, 2)}
+	s := &server{
+		wtime:   0.25,
+		players: map[int]*player{op.id: op, member.id: member},
+	}
+
+	s.handle(member, &inMsg{T: "pvp-time", Time: 18})
+	if s.wtime != 0.25 {
+		t.Fatalf("non-operator changed world time to %v", s.wtime)
+	}
+	if len(member.send) == 0 {
+		t.Fatal("server did not explain why the time change was rejected")
+	}
+
+	s.handle(op, &inMsg{T: "pvp-time", Time: 18})
+	if s.wtime != 0.75 {
+		t.Fatalf("operator-set world time = %v, want 0.75", s.wtime)
+	}
+}
+
 func TestNonOperatorCannotChangeSettings(t *testing.T) {
 	admin := &player{id: 1, name: "Admin", op: true, send: make(chan []byte, 4)}
 	member := &player{id: 2, name: "Player", send: make(chan []byte, 4)}

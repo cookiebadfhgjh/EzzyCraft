@@ -60,19 +60,20 @@ type M map[string]any
 // ---------------------------------------------------------------- types
 
 type player struct {
-	id               int
-	name             string
-	op               bool
-	conn             *websocket.Conn
-	send             chan []byte
-	done             chan struct{}
-	joined           bool
-	x, y, z          float64
-	yaw, pitch       float64
-	health           int
-	dead             bool
-	lastAttack       time.Time
-	lastHealthEffect time.Time
+	id                  int
+	name                string
+	op                  bool
+	conn                *websocket.Conn
+	send                chan []byte
+	done                chan struct{}
+	joined              bool
+	x, y, z             float64
+	yaw, pitch          float64
+	health              int
+	dead                bool
+	lastAttack          time.Time
+	lastHealthEffect    time.Time
+	lastWorldTimeChange time.Time
 }
 
 // inMsg is every message a client can send; unused fields stay zero.
@@ -93,6 +94,7 @@ type inMsg struct {
 	KB     *float64 `json:"kb"`
 	Heal   float64  `json:"heal"`
 	Damage float64  `json:"damage"`
+	Time   float64  `json:"time"`
 }
 
 type saveFile struct {
@@ -289,13 +291,14 @@ func (s *server) join(p *player, m *inMsg) {
 	plist := []M{}
 	for _, q := range s.players {
 		plist = append(plist, M{"id": q.id, "name": q.name, "x": q.x, "y": q.y, "z": q.z,
-			"yaw": q.yaw, "pitch": q.pitch, "dead": q.dead})
+			"yaw": q.yaw, "pitch": q.pitch, "health": q.health, "dead": q.dead})
 	}
 	eb := s.encodeEdits()
 	nChunks := (len(eb) + editChunk - 1) / editChunk
 	welcome := M{
 		"t": "welcome", "id": p.id, "seed": s.seed, "mode": s.mode, "time": s.wtime,
-		"pvp": s.pvp, "pvpKnockback": s.pvpKnockback, "players": plist, "editBytes": len(eb), "chunks": nChunks,
+		"pvp": s.pvp, "pvpKnockback": s.pvpKnockback, "op": p.op,
+		"players": plist, "editBytes": len(eb), "chunks": nChunks,
 		"sim": s.simID == p.id, "spawn": nil,
 	}
 	if s.spawn != nil {
@@ -381,6 +384,18 @@ func (s *server) handle(p *player, m *inMsg) {
 		s.pvpHeal(p, m.Heal)
 	case "pvp-damage":
 		s.pvpDamage(p, m.Damage)
+	case "pvp-time":
+		if !s.isOp(p) {
+			s.sys(p, "Only server operators can change the shared world time.")
+		} else if !math.IsNaN(m.Time) && !math.IsInf(m.Time, 0) && m.Time >= 0 && m.Time < 24 {
+			now := time.Now()
+			if now.Sub(p.lastWorldTimeChange) < 500*time.Millisecond {
+				s.sys(p, "World time can only be adjusted twice per second.")
+			} else {
+				p.lastWorldTimeChange = now
+				s.setWorldTime(m.Time / 24)
+			}
+		}
 	case "pvp-dead":
 		if s.pvp {
 			p.dead, p.health = true, 0
@@ -452,6 +467,7 @@ func (s *server) promoteOperator() {
 	}
 	if next != nil {
 		next.op = true
+		s.sendTo(next, M{"t": "op", "op": true})
 		s.sys(next, "You are now a server operator. Use /help to see commands.")
 	}
 }
@@ -553,6 +569,7 @@ func (s *server) command(p *player, text string) {
 			return
 		}
 		target.op = true
+		s.sendTo(target, M{"t": "op", "op": true})
 		s.sys(target, "You are now a server operator.")
 		s.broadcast(M{"t": "c", "n": "Server", "m": target.name + " is now an operator."}, nil)
 	case "/deop":
@@ -580,6 +597,7 @@ func (s *server) command(p *player, text string) {
 			return
 		}
 		target.op = false
+		s.sendTo(target, M{"t": "op", "op": false})
 		s.sys(target, "Your server operator privileges were removed.")
 		s.broadcast(M{"t": "c", "n": "Server", "m": target.name + " is no longer an operator."}, nil)
 	case "/pvp":

@@ -30,23 +30,46 @@ Shared definition JSON files are stored in `server_data\definitions` next to the
 
 Open `Other\coop-sprite-studio.html` to create custom items and blocks. The editor includes combat and mining stats, including a per-tool knockback multiplier, block drops and light, recipes, and optional GLB models. Add multiple definitions to the pack panel and export one multi-item pack JSON file; import that file with the operator-only in-game definition importer.
 
-The optional JavaScript feature module is an object literal with `onUse`, `onHit`, `onBlockBreak`, `onBlockPlace`, and `onTick` hooks. For example:
+JavaScript is split into two editors. **Unique behavior module** contains this item's hooks; **Shared JavaScript services** contains reusable helper functions available to all of those hooks through `api.services`. For example:
 
 ```js
 ({
   onUse(api, event) {
-    api.effects.playSound('pickup');
+    return api.services.playSoundAndLaunch();
   },
   onHit(api, event) {
+    const victim = event.attackedPlayer;
+    if (victim) api.effects.playSound('hurt');
     return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };
   },
-  onBlockBreak(api, event) {
-    api.inventory.giveItem(110, 1);
+  onBlockUse(api, event) {
+    console.log(event.clickedBy.name + ' used this block');
+  },
+  onProjectileHit(api, event) {
+    if (event.hit.type === 'block') api.effects.particle('break', event.hit.position.x, event.hit.position.y, event.hit.position.z);
+  },
+  onTick(api, event) {
+    if (api.world.time > 18) api.effects.playSound('pickup');
   }
 })
 ```
 
-Hooks receive item, player, and event context. The available APIs are `api.inventory.giveItem(id, count)`, `api.world.setBlock(x, y, z, id)`, `api.world.spawnDrop(x, y, z, id, count)`, `api.player.heal(amount)`, `api.player.damage(amount)`, `api.player.addVelocity(x, y, z)`, `api.effects.playSound(name)`, and `api.effects.particle(name, x, y, z)`. `onHit` may return damage and knockback multipliers. Each player must approve a script before it runs; it executes in an isolated worker with no access to the game page or network, a 500 ms time limit, bounded game actions, and in-world position checks. Online PvP healing is applied by the server and rate-limited.
+The shared-services editor can define named functions, for example:
+
+```js
+({
+  playSoundAndLaunch(api, event) {
+    api.effects.playSound('pickup');
+    return api.projectiles.launch({ speed: 18, lifetime: 4 });
+  }
+})
+```
+
+Call it from any unique hook with `api.services.playSoundAndLaunch()`. The active hook's API and event are automatically passed as the first two service arguments, followed by any arguments supplied to the service call. Unique hooks include `onUse`, `onHit`, `onBlockUse`, `onBlockBreak`, `onBlockPlace`, `onProjectileHit`, and `onTick`. Block-use events include `event.clickedBy`; hit events include `event.attackedPlayer`. Hooks also receive snapshots through `event.players`, and `api.players.list()` / `api.players.get(id)`.
+
+Available APIs include `api.inventory.giveItem(id, count)`, `api.world.setBlock(x, y, z, id)`, `api.world.spawnDrop(x, y, z, id, count)`, `api.world.setTime(hours)`, `api.world.time`, `api.world.raycast(maxDistance)`, `api.projectiles.launch({ speed, lifetime, direction, origin, damage })`, `api.player.heal(amount)`, `api.player.damage(amount)`, `api.player.addVelocity(x, y, z)`, `api.combat.modifyHit(damageMultiplier, knockbackMultiplier)`, `api.effects.playSound(name)`, and `api.effects.particle(name, x, y, z)`. Raycasts report the nearest aimed-at block or player; projectiles trace blocks and players and invoke `onProjectileHit` on impact. The projectile's optional `damage` value is event metadata; it does not directly damage other players. `onHit` may return damage and knockback multipliers. Time changes in a connected server require operator permission.
+
+Each player must approve the unique code and services before they run. They execute in an isolated worker without access to the game page or network. The runtime allows larger modules and more actions than before, while retaining a two-second hook timeout and checks on world, inventory, health, and server-authoritative operations. Shared server definitions can therefore distribute code, but each player still decides whether to execute it.
 
 ## Render
 
