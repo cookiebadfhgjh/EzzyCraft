@@ -30,7 +30,7 @@ Shared definitions are stored in `server_data\definitions`, and complete packs (
 
 Open `Other\coop-sprite-studio.html` to create custom items and blocks. The editor includes combat and mining stats, including a per-tool knockback multiplier, block drops and light, recipes, and optional GLB models. Choose **Pack-wide JavaScript module** from the entry-type dropdown to write and add the pack's one shared module alongside its items and blocks. A pack can also contain JavaScript services and independent game features. The module is stored once under the pack's `javascript.source`; its entry in `entries` identifies it as part of the pack. Export a pack JSON file and import it with the operator-only in-game definition importer.
 
-Each pack has one JavaScript module shared by all its entries. An item's **Pack behavior key** selects its hook object under `items`; JavaScript service entries reference functions under `services`; independent feature entries reference callbacks under `features`:
+Each pack has one JavaScript module shared by all its entries. To give a tool or block unique behavior, set its **Unique behavior key in the pack module** (for example `magicSword`) and define that hook object under `items`; JavaScript service entries reference functions under `services`; independent feature entries reference callbacks under `features`:
 
 ```js
 ({

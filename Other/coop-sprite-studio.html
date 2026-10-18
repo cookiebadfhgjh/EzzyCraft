@@ -169,14 +169,14 @@
         <label for="smelt-seconds">Smelting time (seconds)<input id="smelt-seconds" type="number" min="0.1" max="3600" step="0.1" value="8"></label>
       </div>
     </div>
-    <h3>Unique mechanics</h3>
+    <h3>Unique item/block behavior</h3>
     <label for="mechanics-notes">Behavior notes (informational)
       <textarea id="mechanics-notes" spellcheck="false" placeholder="Optional explanation for players or pack maintainers."></textarea>
     </label>
-    <label for="mechanics">Pack behavior key
+    <label for="mechanics">Unique behavior key in the pack module
       <input id="mechanics" type="text" placeholder="example: magicSword">
     </label>
-    <p class="hint">The key selects this entry's behavior from the pack-wide JavaScript module. Item behavior code is authored once in the pack module, not embedded in each item definition.</p>
+    <p class="hint">To give this tool or block unique behavior, enter a key such as <code>magicSword</code>, then define <code>items.magicSword</code> in the pack-wide JavaScript module. Add hooks such as <code>onUse</code>, <code>onHit</code>, <code>onBlockUse</code>, <code>onBlockBreak</code>, <code>onBlockPlace</code>, <code>onProjectileHit</code>, or <code>onTick</code>. Blocks can use <code>onBlockUse</code> to respond to a player right-click.</p>
     </div>
     <div id="javascript-fields" class="hidden">
     <h3>Pack-wide JavaScript module</h3>
@@ -189,7 +189,7 @@
       <h3 style="margin-top:0">Pack entries <span id="pack-count" class="muted">0 entries</span></h3>
       <label for="pack-name">Pack name<input id="pack-name" value="Co-op item pack"></label>
       <label for="pack-id">Shared pack ID<input id="pack-id" value="coop_item_pack"></label>
-      <p class="hint">Choose Tool, Placeable block, or Pack-wide JavaScript module from the entry type menu. A pack has one shared JavaScript module, plus any items, blocks, services, and independent features that use it.</p>
+      <p class="hint">A pack can contain items, blocks, shared JavaScript services, and independent features such as chat listeners. Add the current item/block, or add a service/feature reference to the pack module.</p>
       <div id="pack-items" class="muted">No items in the pack.</div>
       <div class="field-grid">
         <label for="service-name">JavaScript service name<input id="service-name" placeholder="playSound"></label>
@@ -792,7 +792,10 @@
   function renderPack() {
     const entries = [
       ...packDefinitions.map(definition => ({
-        type: definition.kind, name: definition.name, detail: 'ID ' + definition.registry.id,
+        type: definition.kind,
+        name: definition.name,
+        detail: 'ID ' + definition.registry.id +
+          (definition.mechanics && definition.mechanics.unique ? ', behavior: ' + definition.mechanics.unique : ''),
       })),
       ...packScriptEntries,
     ];
@@ -926,6 +929,11 @@
       const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
       const javascript = moduleEntry ? moduleEntry.source.trim() : '';
       if (!packDefinitions.length && !packScriptEntries.length) throw new Error('Add at least one entry to the pack first.');
+      const needsModule = packDefinitions.some(definition => definition.mechanics && definition.mechanics.unique) ||
+        packScriptEntries.some(entry => entry.type === 'service' || entry.type === 'feature');
+      if (needsModule && !moduleEntry) {
+        throw new Error('Add a Pack-wide JavaScript module entry before exporting behavior, service, or feature hooks.');
+      }
       if (javascript.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
       if (javascript) new Function('return (' + javascript + ');');
       const id = $('pack-id').value.trim();
