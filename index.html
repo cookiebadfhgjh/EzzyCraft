@@ -31,6 +31,14 @@
   #crosshair.hit { transform: translate(-50%, -50%) scale(1.15); }
   #crosshair.interact::before, #crosshair.interact::after { background: #9fe870;
     box-shadow: 0 0 6px rgba(159,232,112,.9); }
+  #pvp-cooldown { position: fixed; left: 50%; top: calc(50% + 18px); width: 46px; height: 5px;
+    transform: translateX(-50%); z-index: 10; border: 1px solid rgba(0,0,0,.9);
+    background: rgba(0,0,0,.75); opacity: 0; transition: opacity .12s; pointer-events: none; }
+  #pvp-cooldown.on { opacity: .95; }
+  #pvp-cooldown-fill { width: 100%; height: 100%; background: #9fe870;
+    box-shadow: 0 0 4px rgba(159,232,112,.8); transition: width .04s linear, background .12s; }
+  #pvp-cooldown.recharging #pvp-cooldown-fill { background: #ffd35a;
+    box-shadow: 0 0 4px rgba(255,211,90,.8); }
   #health-bar { position: fixed; left: 50%; bottom: 90px;
     transform: translateX(-50%) translateY(80px); display: flex; gap: 2px; z-index: 10;
     opacity: 0; transition: opacity .25s, transform .25s; pointer-events: none;
@@ -345,6 +353,7 @@
 <body>
 
 <div id="crosshair"></div>
+<div id="pvp-cooldown" aria-label="PvP attack cooldown"><div id="pvp-cooldown-fill"></div></div>
 <div id="lava-overlay"></div>
 <div id="water-overlay"></div>
 <div id="damage-overlay"></div>
@@ -501,8 +510,19 @@
                placeholder="Enter the code configured by the server operator">
         <div style="font-size:10px;opacity:.7">The server operator sets this when starting the server with <code>-op-code</code>.</div>
         <button class="mc-btn" id="btn-server-settings-unlock">Unlock Server Settings</button>
-        <div id="server-settings-tools" style="display:none">
+        <div class="form" id="server-settings-tools" style="display:none">
           <button class="mc-btn accent" id="btn-import-definition">Import Item / Block Definition</button>
+          <label for="server-game-mode">SERVER GAME MODE</label>
+          <select class="mc-input" id="server-game-mode">
+            <option value="survival">Survival</option>
+            <option value="creative">Creative</option>
+          </select>
+          <label for="server-world-time">SET WORLD TIME</label>
+          <input class="mc-input" id="server-world-time" type="time" value="06:00">
+          <label><input id="server-pvp" type="checkbox"> Enable PvP</label>
+          <label for="server-pvp-knockback">PVP KNOCKBACK: <span id="server-pvp-knockback-value">100%</span></label>
+          <input class="opt-slider" id="server-pvp-knockback" type="range" min="0" max="200" step="10" value="100">
+          <button class="mc-btn accent" id="btn-server-settings-apply">Apply Server Settings</button>
           <button class="mc-btn" id="btn-server-settings-lock">Lock Server Settings</button>
         </div>
       </section>
@@ -634,7 +654,7 @@ function isPlantBlock(id) {
 /* ============================================================
    TEXTURE ATLAS
    ============================================================ */
-const ATLAS_TILE = 32, ATLAS_COLS = 8, ATLAS_ROWS = 7;
+const ATLAS_TILE = 32, ATLAS_COLS = 8, ATLAS_ROWS = 16;
 
 function h2(x, y) {
   let n = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263);
@@ -3164,8 +3184,10 @@ let hotbar = new Array(HOTBAR_SIZE).fill(null);
 let selected = 0;
 let health = MAX_HEALTH;
 let pvpEnabled = false;
+let pvpKnockback = 1;
 let pvpTarget = null;
 let pvpAttackCooldown = 0;
+let pvpAttackCooldownDuration = 0.55;
 let voidAccum = 0;
 let fallStartY = null;
 let deathReason = 'You died';
@@ -3617,6 +3639,8 @@ const invEl    = document.getElementById('inventory');
 const invTitleEl = document.getElementById('inv-title');
 const invHintEl = document.getElementById('inv-hint');
 const crossEl  = document.getElementById('crosshair');
+const pvpCooldownEl = document.getElementById('pvp-cooldown');
+const pvpCooldownFillEl = document.getElementById('pvp-cooldown-fill');
 const statusEl = document.getElementById('status');
 const hudFpsEl = document.getElementById('hud-fps');
 const hudCoordsEl = document.getElementById('hud-coords');
@@ -3721,6 +3745,19 @@ document.addEventListener('mousedown', e => {
           return;
         }
       }
+    }
+    const selectedStack = hotbar[selected];
+    const selectedDefinition = selectedStack && customDefinitionsById.get(selectedStack.id);
+    const selectedItem = selectedStack && BLOCK_TYPES[selectedStack.id];
+    if (selectedDefinition && selectedItem && selectedItem.isTool) {
+      void runCustomFeatureHook(selectedDefinition, 'onUse', {
+        type: 'item', id: selectedStack.id,
+        target: target && target.type === 'block'
+          ? { type: 'block', id: getBlock(target.x, target.y, target.z), position: { x: target.x, y: target.y, z: target.z } }
+          : null,
+      });
+      triggerSwing();
+      return;
     }
     placeBlock(); triggerSwing();
   }
@@ -3868,48 +3905,70 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
     if (!file.name.toLowerCase().endsWith('.json') || file.size > MAX_CUSTOM_DEFINITION_BYTES) {
       throw new Error('Choose an item-definition JSON file no larger than 32 MB.');
     }
-    const source = JSON.parse(await file.text());
-    const prepared = await prepareCustomDefinition(source);
-    assertCustomDefinitionAvailable(prepared.definition);
-    const previous = customDefinitionsById.get(prepared.definition.registry.id);
-    prepared.definition.pendingGrant = previous
-      ? previous.pendingGrant === true
-      : !currentWorld;
     if (!serverOperatorCode) throw new Error('Unlock Server Settings before importing a definition.');
-    const sharedDefinition = { ...prepared.definition };
-    delete sharedDefinition.pendingGrant;
-    const response = await fetch(serverApiUrl('/api/definitions', NET.code || location.host || defaultServerAddr()), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
-      body: JSON.stringify(sharedDefinition),
-    });
-    if (!response.ok) throw new Error(await response.text() || 'The server could not save the definition.');
-    let grantWarning = '';
-    if (prepared.definition.pendingGrant) {
-      const stored = [...customDefinitionsById.values()].filter(definition =>
-        definition.registry.id !== prepared.definition.registry.id);
-      stored.push(prepared.definition);
-      try {
-        await saveCustomDefinitions(stored);
-      } catch (error) {
-        console.error('Shared definition was saved, but its pending item grant could not be persisted:', error);
-        grantWarning = ' Your personal pending item grant could not be saved: ' + error.message;
-      }
+    const source = JSON.parse(await file.text());
+    const sources = source && source.schema === 'coop1.10.item-block-pack.v1'
+      ? source.definitions
+      : [source];
+    if (!Array.isArray(sources) || sources.length < 1 || sources.length > 74) {
+      throw new Error('A pack must contain from 1 to 74 item/block definitions.');
     }
-    registerCustomDefinition(prepared.definition, prepared.modelTemplate);
-    const added = !previous && currentWorld && addToInventory(prepared.definition.registry.id, 1) === 0;
+    const preparedDefinitions = [];
+    const ids = new Set();
+    const tiles = new Set();
+    for (const itemSource of sources) {
+      const prepared = await prepareCustomDefinition(itemSource);
+      const id = prepared.definition.registry.id;
+      const tile = prepared.definition.texture.atlasIndex;
+      if (ids.has(id)) throw new Error('The pack contains duplicate registry ID ' + id + '.');
+      if (tiles.has(tile)) throw new Error('The pack contains duplicate atlas tile ' + tile + '.');
+      ids.add(id);
+      tiles.add(tile);
+      assertCustomDefinitionAvailable(prepared.definition);
+      preparedDefinitions.push(prepared);
+    }
+    const approved = approveCustomFeatureScripts(preparedDefinitions.map(prepared => prepared.definition));
+    const containsScripts = preparedDefinitions.some(prepared =>
+      prepared.definition.features && prepared.definition.features.source);
+    let imported = 0;
+    let grantWarning = '';
+    for (const prepared of preparedDefinitions) {
+      const definition = prepared.definition;
+      const id = definition.registry.id;
+      const previous = customDefinitionsById.get(id);
+      definition.pendingGrant = previous
+        ? previous.pendingGrant === true
+        : !currentWorld;
+      const sharedDefinition = { ...definition };
+      delete sharedDefinition.pendingGrant;
+      const response = await fetch(serverApiUrl('/api/definitions', NET.code || location.host || defaultServerAddr()), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+        body: JSON.stringify(sharedDefinition),
+      });
+      if (!response.ok) {
+        throw new Error((imported ? 'Imported ' + imported + ' of ' + preparedDefinitions.length + ' definitions; ' : '') +
+          (await response.text() || 'The server could not save ' + definition.name + '.'));
+      }
+      if (definition.pendingGrant) {
+        const stored = [...customDefinitionsById.values()].filter(entry => entry.registry.id !== id);
+        stored.push(definition);
+        try {
+          await saveCustomDefinitions(stored);
+        } catch (error) {
+          console.error('Shared definition was saved, but its pending item grant could not be persisted:', error);
+          grantWarning = ' Personal pending item grants could not be saved: ' + error.message;
+        }
+      }
+      registerCustomDefinition(definition, prepared.modelTemplate);
+      if (!previous && currentWorld) addToInventory(id, 1);
+      imported++;
+    }
     renderHotbar();
     if (inventoryOpen) renderInventory();
-    toast((previous
-      ? 'Updated ' + prepared.definition.name + '.'
-      : 'Imported ' + prepared.definition.name +
-        (added
-          ? ' and added it to your hotbar.'
-          : (prepared.definition.pendingGrant
-            ? '; it will be added when you enter a survival world.'
-            : (currentWorld
-              ? '; no hotbar slot was free, so make room and craft it from its recipe.'
-              : '; it is available in the creative inventory or through its recipe.')))) + grantWarning);
+    toast(imported + (imported === 1 ? ' definition imported.' : ' definitions imported.') +
+      (containsScripts ? (approved ? ' JavaScript features enabled.' : ' JavaScript features were left disabled.') : '') +
+      grantWarning);
   } catch (error) {
     console.error('Could not import item definition:', error);
     toast('Could not import definition: ' + error.message, true);
@@ -4380,14 +4439,29 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
   const code = document.getElementById('server-op-code').value;
   if (!code) { toast('Enter the server operator code.', true); return; }
   try {
-    const response = await fetch(serverApiUrl('/api/operator', NET.code || location.host || defaultServerAddr()), {
+    const addr = NET.code || location.host || defaultServerAddr();
+    const response = await fetch(serverApiUrl('/api/operator', addr), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code }),
     });
     if (!response.ok) throw new Error(await response.text() || 'The code was rejected.');
+    const settingsResponse = await fetch(serverApiUrl('/api/settings', addr));
+    if (!settingsResponse.ok) {
+      throw new Error(await settingsResponse.text() || 'Could not load server settings.');
+    }
+    const settings = await settingsResponse.json();
+    document.getElementById('server-game-mode').value = settings.mode;
+    document.getElementById('server-pvp').checked = settings.pvp === true;
+    const knockbackPercent = Math.round(Math.max(0, Math.min(2, Number(settings.pvpKnockback ?? 1))) * 100);
+    document.getElementById('server-pvp-knockback').value = knockbackPercent;
+    document.getElementById('server-pvp-knockback-value').textContent = knockbackPercent + '%';
+    const minutes = Math.floor(Number(settings.time) * 24 * 60);
+    document.getElementById('server-world-time').value =
+      String(Math.floor(minutes / 60) % 24).padStart(2, '0') + ':' +
+      String(minutes % 60).padStart(2, '0');
     serverOperatorCode = code;
-    document.getElementById('server-settings-tools').style.display = 'grid';
+    document.getElementById('server-settings-tools').style.display = 'flex';
     toast('Server settings unlocked.');
   } catch (error) {
     serverOperatorCode = '';
@@ -4396,6 +4470,34 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
     toast('Could not unlock server settings: ' + error.message, true);
   }
 };
+document.getElementById('btn-server-settings-apply').onclick = async () => {
+  if (!serverOperatorCode) { toast('Unlock Server Settings first.', true); return; }
+  const [hours, minutes] = document.getElementById('server-world-time').value.split(':').map(Number);
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    toast('Enter a valid world time.', true);
+    return;
+  }
+  try {
+    const response = await fetch(serverApiUrl('/api/settings', NET.code || location.host || defaultServerAddr()), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+      body: JSON.stringify({
+        mode: document.getElementById('server-game-mode').value,
+        pvp: document.getElementById('server-pvp').checked,
+        time: (hours * 60 + minutes) / (24 * 60),
+        pvpKnockback: Number(document.getElementById('server-pvp-knockback').value) / 100,
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text() || 'The server could not apply settings.');
+    toast('Server settings applied to the online world.');
+  } catch (error) {
+    console.error('Could not apply server settings:', error);
+    toast('Could not apply server settings: ' + error.message, true);
+  }
+};
+document.getElementById('server-pvp-knockback').addEventListener('input', event => {
+  document.getElementById('server-pvp-knockback-value').textContent = event.target.value + '%';
+});
 document.getElementById('btn-server-settings-lock').onclick = () => {
   serverOperatorCode = '';
   document.getElementById('server-op-code').value = '';
@@ -4605,9 +4707,344 @@ const RECIPES = [
 RECIPES.push({"type":"shaped","pattern":[[0,110,110],[0,100,110],[0,100,0]],"result":{"id":119,"count":1}});
 
 const CUSTOM_DEFINITIONS_KEY = 'coop_custom_definitions_v1';
+const CUSTOM_FEATURE_APPROVALS_KEY = 'coop_custom_feature_approvals_v1';
 const MAX_CUSTOM_DEFINITION_BYTES = 32 * 1024 * 1024;
+const customFeatureRunners = new Map();
+const customFeatureActionBudgets = new Map();
+const sessionCustomFeatureApprovals = new Map();
+const failedCustomFeatureHashes = new Map();
+let customFeatureHealthEffectAt = -Infinity;
+let customFeatureCallId = 0;
+function customFeatureHash(source) {
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+function customFeatureApprovals() {
+  const stored = localStorage.getItem(CUSTOM_FEATURE_APPROVALS_KEY);
+  if (!stored) return {};
+  const approvals = JSON.parse(stored);
+  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals)) {
+    throw new Error('Stored JavaScript feature approvals are invalid.');
+  }
+  return approvals;
+}
+function approveCustomFeatureScripts(definitions) {
+  const scripted = definitions.filter(definition =>
+    definition.features && typeof definition.features.source === 'string' && definition.features.source.trim());
+  if (!scripted.length) return true;
+  let approvals = {};
+  try {
+    approvals = customFeatureApprovals();
+  } catch (error) {
+    console.error('Could not read JavaScript feature approvals:', error);
+    toast('JavaScript features cannot be remembered by this browser; enabling them for this session only.', true);
+  }
+  const pending = scripted.filter(definition =>
+    approvals[definition.registry.id] !== customFeatureHash(definition.features.source));
+  if (!pending.length) return true;
+  const itemList = pending.map(definition => definition.name).join(', ');
+  if (!window.confirm(
+    'This definition contains JavaScript features: ' + itemList +
+    '. Enable them? Scripts run in a restricted worker without access to the game page or network. ' +
+    'Their game actions are limited to the built-in item API.')) return false;
+  for (const definition of pending) {
+    approvals[definition.registry.id] = customFeatureHash(definition.features.source);
+    sessionCustomFeatureApprovals.set(definition.registry.id, customFeatureHash(definition.features.source));
+  }
+  try {
+    localStorage.setItem(CUSTOM_FEATURE_APPROVALS_KEY, JSON.stringify(approvals));
+  } catch (error) {
+    console.error('Could not save JavaScript feature approvals:', error);
+  }
+  return true;
+}
+function customFeatureApproved(definition) {
+  if (!definition.features || !definition.features.source) return false;
+  if (sessionCustomFeatureApprovals.get(definition.registry.id) === customFeatureHash(definition.features.source)) return true;
+  try {
+    return customFeatureApprovals()[definition.registry.id] === customFeatureHash(definition.features.source);
+  } catch (error) {
+    console.error('Could not read JavaScript feature approvals:', error);
+    return false;
+  }
+}
+function disposeCustomFeatureRunner(id, reason = 'JavaScript feature worker was stopped.') {
+  const runner = customFeatureRunners.get(id);
+  if (!runner) return;
+  customFeatureRunners.delete(id);
+  runner.frame.remove();
+  for (const pending of runner.pending.values()) {
+    clearTimeout(pending.timeout);
+    pending.reject(new Error(reason));
+  }
+  runner.pending.clear();
+}
+function createCustomFeatureRunner(definition) {
+  const id = definition.registry.id;
+  const source = definition.features.source;
+  const hash = customFeatureHash(source);
+  if (failedCustomFeatureHashes.get(id) === hash) {
+    throw new Error('This JavaScript feature module was disabled after an earlier error.');
+  }
+  const existing = customFeatureRunners.get(id);
+  if (existing && existing.hash === hash) return existing;
+  disposeCustomFeatureRunner(id);
+  const frame = document.createElement('iframe');
+  frame.hidden = true;
+  frame.setAttribute('sandbox', 'allow-scripts');
+  frame.title = 'Isolated custom item feature worker';
+  const workerBootstrap = `
+    let handlers, allowed, itemId;
+    self.onmessage = async event => {
+      const data = event.data;
+      if (data.type === 'init') {
+        itemId = data.id;
+        allowed = data.events;
+        for (const name of ['fetch','XMLHttpRequest','WebSocket','EventSource','importScripts','Worker','SharedWorker','BroadcastChannel','WebAssembly','setTimeout','setInterval','requestAnimationFrame']) {
+          try { Object.defineProperty(globalThis, name, { value: undefined, writable: false, configurable: false }); } catch {}
+        }
+        try {
+          handlers = new Function('"use strict"; return (' + data.source + ');')();
+          if (!handlers || typeof handlers !== 'object') throw new Error('Module must evaluate to an object of hooks.');
+          postMessage({ type: 'ready', id: itemId });
+        } catch (error) {
+          postMessage({ type: 'error', id: itemId, message: error.message || String(error) });
+        }
+        return;
+      }
+      if (!handlers || !allowed.includes(data.hook)) return;
+      const actions = [];
+      const push = (capability, type, args) => {
+        if (data.capabilities.includes(capability) && actions.length < 32) actions.push({ type, args });
+      };
+      const api = Object.freeze({
+        combat: Object.freeze({
+          modifyHit: (damageMultiplier = 1, knockbackMultiplier = 1) =>
+            data.capabilities.includes('combat') ? { damageMultiplier, knockbackMultiplier } : null,
+        }),
+        inventory: Object.freeze({ giveItem: (id, count = 1) => push('inventory', 'giveItem', [id, count]) }),
+        world: Object.freeze({
+          setBlock: (x, y, z, id) => push('world', 'setBlock', [x, y, z, id]),
+          spawnDrop: (x, y, z, id, count = 1) => push('world', 'spawnDrop', [x, y, z, id, count]),
+        }),
+        player: Object.freeze({
+          heal: amount => push('player', 'heal', [amount]),
+          damage: amount => push('player', 'damage', [amount]),
+          addVelocity: (x, y, z) => push('player', 'addVelocity', [x, y, z]),
+        }),
+        effects: Object.freeze({
+          playSound: name => push('effects', 'playSound', [name]),
+          particle: (name, x, y, z) => push('effects', 'particle', [name, x, y, z]),
+        }),
+      });
+      try {
+        const hook = handlers[data.hook];
+        const result = typeof hook === 'function' ? await hook(api, data.context) : null;
+        postMessage({ type: 'result', id: data.id, result, actions });
+        close();
+      } catch (error) {
+        postMessage({ type: 'result', id: data.id, error: error && error.message || String(error), actions });
+        close();
+      }
+    };
+  `;
+  frame.srcdoc = '<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src ' +
+    '&#39;none&#39;; script-src &#39;unsafe-inline&#39; &#39;unsafe-eval&#39;; worker-src blob:; ' +
+    'connect-src &#39;none&#39;; object-src &#39;none&#39;; base-uri &#39;none&#39;; form-action &#39;none&#39;">' +
+    '<script>let worker,config,queued=[],workerReady=false;function startWorker(){workerReady=false;const url=URL.createObjectURL(new Blob([' +
+    JSON.stringify(workerBootstrap) + '],{type:"text/javascript"}));worker=new Worker(url);URL.revokeObjectURL(url);' +
+    'worker.onmessage=event=>{const message=event.data;parent.postMessage({channel:"coop-feature",id:config.id,message},"*");' +
+    'if(message.type==="ready"){workerReady=true;for(const call of queued.splice(0))worker.postMessage(call)}' +
+    'else if(message.type==="result"||message.type==="error"){workerReady=false;worker.terminate();worker=null}};' +
+    'worker.onerror=event=>{parent.postMessage({channel:"coop-feature",id:config.id,message:{type:"error",message:event.message||"Worker failed"}},"*");workerReady=false;worker.terminate();worker=null};' +
+    'worker.postMessage({type:"init",id:config.id,source:config.source,events:config.events})}' +
+    'addEventListener("message",event=>{if(event.source!==parent)return;const data=event.data;if(data.type==="init"){config=data;startWorker()}' +
+    'else if(worker&&workerReady)worker.postMessage(data);else{queued.push(data);if(!worker)startWorker()}});</scr'+'ipt>';
+  const runner = {
+    id, hash, frame, ready: false, failed: null, pending: new Map(), queue: [],
+    events: definition.features.events,
+    capabilities: definition.features.capabilities,
+  };
+  customFeatureRunners.set(id, runner);
+  frame.addEventListener('load', () => {
+    frame.contentWindow.postMessage({
+      type: 'init', id, source,
+      events: definition.features.events,
+      capabilities: definition.features.capabilities,
+    }, '*');
+  }, { once: true });
+  document.body.appendChild(frame);
+  return runner;
+}
+window.addEventListener('message', event => {
+  const message = event.data;
+  if (!message || message.channel !== 'coop-feature') return;
+  const runner = customFeatureRunners.get(message.id);
+  if (!runner || event.source !== runner.frame.contentWindow || !message.message) return;
+  const response = message.message;
+  if (response.type === 'ready') {
+    runner.ready = true;
+    for (const call of runner.queue.splice(0)) runner.frame.contentWindow.postMessage(call, '*');
+    return;
+  }
+  if (response.type === 'error') {
+    runner.failed = response.message || 'JavaScript module failed to start.';
+    for (const pending of runner.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error(runner.failed));
+    }
+    runner.pending.clear();
+    return;
+  }
+  if (response.type !== 'result' || !Number.isInteger(response.id)) return;
+  const pending = runner.pending.get(response.id);
+  if (!pending) return;
+  runner.pending.delete(response.id);
+  clearTimeout(pending.timeout);
+  if (response.error) {
+    runner.failed = response.error;
+    failedCustomFeatureHashes.set(runner.id, runner.hash);
+    pending.reject(new Error(response.error));
+    return;
+  }
+  pending.resolve({ result: response.result, actions: Array.isArray(response.actions) ? response.actions : [] });
+});
+function callCustomFeatureHook(definition, hook, context) {
+  if (!definition.features || !definition.features.events.includes(hook) ||
+      !customFeatureApproved(definition)) return Promise.resolve(null);
+  if (failedCustomFeatureHashes.get(definition.registry.id) === customFeatureHash(definition.features.source)) {
+    return Promise.resolve(null);
+  }
+  const runner = createCustomFeatureRunner(definition);
+  if (runner.failed) return Promise.resolve(null);
+  if (runner.pending.size >= 1) return Promise.resolve(null);
+  const id = ++customFeatureCallId;
+  const call = { id, hook, context, capabilities: runner.capabilities };
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      failedCustomFeatureHashes.set(definition.registry.id, runner.hash);
+      disposeCustomFeatureRunner(definition.registry.id, 'JavaScript feature hook exceeded its 500 ms time limit.');
+    }, 500);
+    runner.pending.set(id, { resolve, reject, timeout });
+    if (runner.ready) runner.frame.contentWindow.postMessage(call, '*');
+    else runner.queue.push(call);
+  });
+}
+function applyCustomFeatureActions(definition, actions) {
+  const capabilities = new Set(definition.features && definition.features.capabilities || []);
+  const validPosition = (x, y, z) => [x, y, z].every(Number.isFinite) &&
+    Math.abs(x - player.pos.x) <= 8 && Math.abs(y - player.pos.y) <= 8 && Math.abs(z - player.pos.z) <= 8;
+  const now = performance.now();
+  let budget = customFeatureActionBudgets.get(definition.registry.id);
+  if (!budget || now - budget.startedAt >= 1000) {
+    budget = { startedAt: now, actions: 0, drops: 0 };
+    customFeatureActionBudgets.set(definition.registry.id, budget);
+  }
+  for (const action of actions.slice(0, 32)) {
+    if (budget.actions >= 32) break;
+    budget.actions++;
+    if (!action || !Array.isArray(action.args)) continue;
+    const [a, b, c, d, e] = action.args;
+    switch (action.type) {
+      case 'giveItem':
+        if (!capabilities.has('inventory') || !Number.isInteger(a) || !BLOCK_TYPES[a] ||
+            !Number.isInteger(b) || b < 1 || b > 64) break;
+        addToInventory(a, b); renderHotbar(); if (inventoryOpen) renderInventory();
+        break;
+      case 'setBlock':
+        if (!capabilities.has('world') || ![a, b, c, d].every(Number.isInteger) ||
+            !inBounds2(a, b, c) || (d !== AIR && (!BLOCK_TYPES[d] || BLOCK_TYPES[d].isItem)) ||
+            getBlock(a, b, c) === BEDROCK || !validPosition(a, b, c) ||
+            (d !== AIR && isSolid(d) &&
+              player.pos.x + player.width / 2 > a && player.pos.x - player.width / 2 < a + 1 &&
+              player.pos.y + player.height > b && player.pos.y < b + 1 &&
+              player.pos.z + player.width / 2 > c && player.pos.z - player.width / 2 < c + 1) ||
+            (d !== AIR && remoteIntersects(a, b, c))) break;
+        setBlock(a, b, c, d); rebuildAround(a, b, c); wakeFluid(a, b, c);
+        break;
+      case 'spawnDrop':
+        if (!capabilities.has('world') || !validPosition(a, b, c) ||
+            !Number.isInteger(d) || !BLOCK_TYPES[d] || !Number.isInteger(e) || e < 1 ||
+            e > 64 || budget.drops + e > 32) break;
+        budget.drops += e;
+        spawnDrop(a, b, c, d, e);
+        break;
+      case 'heal':
+        if (!capabilities.has('player') || !Number.isFinite(a) || a <= 0 || a > 20) break;
+        if (NET.role === 'guest' && pvpEnabled) {
+          if (a < 1 || a > 4 || !NET.hostConn || !NET.hostConn.open) break;
+          NET.hostConn.send({ t: 'pvp-heal', heal: a });
+        } else if (NET.role === 'host' && pvpEnabled) {
+          const now = performance.now();
+          if (a < 1 || a > 4 || health >= MAX_HEALTH || now - customFeatureHealthEffectAt < 1000) break;
+          customFeatureHealthEffectAt = now;
+          health = Math.min(MAX_HEALTH, health + Math.round(a));
+          updateHealthBar();
+          broadcast({ t: 'pvp-health', id: 0, health, dead: health <= 0, amount: 0 });
+        } else {
+          health = Math.min(MAX_HEALTH, health + a); updateHealthBar();
+        }
+        break;
+      case 'damage':
+        if (!capabilities.has('player') || !Number.isFinite(a) || a <= 0 || a > 20) break;
+        if (NET.role === 'guest' && pvpEnabled) {
+          if (a < 1 || a > 4 || !NET.hostConn || !NET.hostConn.open) break;
+          NET.hostConn.send({ t: 'pvp-damage', damage: a });
+        } else if (NET.role === 'host' && pvpEnabled) {
+          const now = performance.now();
+          if (a < 1 || a > 4 || health <= 0 || now - customFeatureHealthEffectAt < 1000) break;
+          customFeatureHealthEffectAt = now;
+          damage(Math.round(a), 'Custom item effect', true);
+        } else {
+          damage(a, 'Custom item effect');
+        }
+        break;
+      case 'addVelocity':
+        if (!capabilities.has('player') || ![a, b, c].every(Number.isFinite) ||
+            Math.abs(a) > 20 || Math.abs(b) > 20 || Math.abs(c) > 20) break;
+        player.vel.x += a; player.vel.y += b; player.vel.z += c;
+        break;
+      case 'playSound':
+        if (capabilities.has('effects') && typeof a === 'string' && Object.prototype.hasOwnProperty.call(SFX, a)) playSFX(a);
+        break;
+      case 'particle':
+        if (!capabilities.has('effects') || typeof a !== 'string' || !validPosition(b, c, d)) break;
+        if (a === 'break') spawnBreakParticles(Math.floor(b), Math.floor(c), Math.floor(d), hotbar[selected] ? hotbar[selected].id : 0);
+        else if (a === 'smoke') spawnSmoke(b, c, d);
+        else if (a === 'bubble') spawnBubble(b, c, d);
+        else if (a === 'water') spawnWaterSplash(b, c, d, 1);
+        else if (a === 'lava') spawnLavaSplash(b, c, d, 1);
+        break;
+    }
+  }
+  renderHotbar();
+  if (inventoryOpen) renderInventory();
+}
+async function runCustomFeatureHook(definition, hook, context) {
+  try {
+    const response = await callCustomFeatureHook(definition, hook, {
+      ...context,
+      item: { id: definition.registry.id, name: definition.name, kind: definition.kind },
+      player: {
+        position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+        health, gameMode,
+      },
+    });
+    if (!response) return null;
+    applyCustomFeatureActions(definition, response.actions);
+    return response.result;
+  } catch (error) {
+    console.error('Custom JavaScript feature failed for ' + definition.name + ':', error);
+    toast('JavaScript features for ' + definition.name + ' were disabled: ' + error.message, true);
+    return null;
+  }
+}
 function findFreeDefinitionId(kind) {
-  const minimum = kind === 'tool' ? 119 : 30;
+  const minimum = kind === 'tool' ? 120 : 30;
   const maximum = kind === 'tool' ? 65535 : 255;
   for (let id = minimum; id <= maximum; id++) {
     if (!BLOCK_TYPES[id]) return id;
@@ -4623,8 +5060,8 @@ function findFreeCustomTile() {
     if (tileDef.bottom !== undefined) used.add(tileDef.bottom);
   }
   for (const definition of customDefinitionsById.values()) used.add(definition.texture.atlasIndex);
-  for (let tile = 53; tile <= 55; tile++) if (!used.has(tile)) return tile;
-  throw new Error('No unused custom texture atlas tiles remain (53–55).');
+  for (let tile = 53; tile < ATLAS_COLS * ATLAS_ROWS; tile++) if (!used.has(tile)) return tile;
+  throw new Error('No unused custom texture atlas tiles remain.');
 }
 function requireInteger(value, label, min, max) {
   const number = Number(value);
@@ -4646,22 +5083,26 @@ function validateCustomDefinition(source) {
     throw new Error('Definition sprite pixels are missing or invalid.');
   }
   const kind = source.kind;
-  const minimumId = kind === 'tool' ? 119 : 30;
+  const minimumId = kind === 'tool' ? 120 : 30;
   const maximumId = kind === 'tool' ? 65535 : 255;
   const id = requireInteger(source.registry && source.registry.id !== undefined ? source.registry.id : findFreeDefinitionId(kind),
     'Registry ID', minimumId, maximumId);
+  if (kind === 'block' && (id === 99 || (id >= 100 && id <= 119))) {
+    throw new Error('Block registry IDs 99 and 100–119 are reserved by the game.');
+  }
   const atlasIndex = requireInteger(source.texture && source.texture.atlasIndex !== undefined
-    ? source.texture.atlasIndex : findFreeCustomTile(), 'Atlas tile', 53, 55);
+    ? source.texture.atlasIndex : findFreeCustomTile(), 'Atlas tile', 54, ATLAS_COLS * ATLAS_ROWS - 1);
   if (!source.base || typeof source.base !== 'object') throw new Error('Definition base mechanics are missing.');
   const base = { ...source.base };
   if (kind === 'tool') {
     base.toolType = base.toolType || 'none';
     base.harvestLevel = base.harvestLevel ?? 0;
+    base.knockbackMultiplier = base.knockbackMultiplier ?? 1;
     if (!['pickaxe', 'axe', 'shovel', 'hoe', 'sword', 'none'].includes(base.toolType)) {
       throw new Error('Tool type is invalid.');
     }
     for (const [field, min, max] of [
-      ['damage', 0, 1000], ['cooldownSeconds', 0, 60], ['reachBlocks', 0, 32],
+      ['damage', 0, 1000], ['cooldownSeconds', 0, 60], ['knockbackMultiplier', 0, 3], ['reachBlocks', 0, 32],
       ['durabilityUses', 1, 1000000], ['miningSpeedMultiplier', 0, 100],
       ['harvestLevel', 0, 255], ['maxStack', 1, 64],
     ]) {
@@ -4699,6 +5140,18 @@ function validateCustomDefinition(source) {
   }
   if (source.mesh && (source.mesh.mimeType !== 'model/gltf-binary' || typeof source.mesh.base64 !== 'string' || !source.mesh.base64)) {
     throw new Error('Mesh data must be embedded as a binary glTF (.glb).');
+  }
+  let features = source.features;
+  if (features !== undefined) {
+    const allowedEvents = ['onUse', 'onHit', 'onBlockBreak', 'onBlockPlace', 'onTick'];
+    const allowedCapabilities = ['combat', 'inventory', 'world', 'player', 'effects'];
+    if (!features || features.runtime !== 'coop1.10.javascript-feature.v1' ||
+        typeof features.source !== 'string' || !features.source.trim() || features.source.length > 65536 ||
+        !Array.isArray(features.events) || features.events.some(event => !allowedEvents.includes(event)) ||
+        !Array.isArray(features.capabilities) || features.capabilities.some(capability => !allowedCapabilities.includes(capability))) {
+      throw new Error('JavaScript feature module is invalid or requests unsupported capabilities.');
+    }
+    features = { ...features, events: [...new Set(features.events)], capabilities: [...new Set(features.capabilities)] };
   }
   let recipe = source.recipe || null;
   if (recipe) {
@@ -4741,6 +5194,7 @@ function validateCustomDefinition(source) {
     texture: { ...(source.texture || {}), atlasIndex },
     base,
     recipe,
+    features,
   };
   return definition;
 }
@@ -4846,6 +5300,7 @@ function registerCustomDefinition(definition, modelTemplate) {
   assertCustomDefinitionAvailable(definition);
   const id = definition.registry.id;
   const tile = definition.texture.atlasIndex;
+  disposeCustomFeatureRunner(id);
   const existingDefinition = customDefinitionsById.get(id);
   if (existingDefinition && existingDefinition.recipe && existingDefinition.recipe.type === 'smelting') {
     const oldInput = existingDefinition.recipe.input.id;
@@ -4860,6 +5315,8 @@ function registerCustomDefinition(definition, modelTemplate) {
       speed: definition.base.miningSpeedMultiplier, maxStack: definition.base.maxStack,
       damage: definition.base.damage, attackCooldown: definition.base.cooldownSeconds,
       reach: definition.base.reachBlocks, harvestLevel: definition.base.harvestLevel,
+      knockbackMultiplier: definition.base.knockbackMultiplier,
+      knockbackMultiplier: definition.base.knockbackMultiplier,
       customDefinition: true,
     };
     DURABILITY[id] = definition.base.durabilityUses;
@@ -4979,11 +5436,20 @@ await restoreCustomDefinitions();
 async function loadServerCustomDefinitions(addr) {
   const response = await fetch(serverApiUrl('/api/definitions', addr));
   if (!response.ok) throw new Error(await response.text() || 'Could not load shared server definitions.');
-  const definitions = await response.json();
-  if (!Array.isArray(definitions)) throw new Error('The server returned an invalid definition list.');
-  for (const source of definitions) {
+  const sources = await response.json();
+  if (!Array.isArray(sources)) throw new Error('The server returned an invalid definition list.');
+  const preparedDefinitions = [];
+  for (const source of sources) {
     try {
-      await installSharedDefinition(source, false);
+      preparedDefinitions.push(await prepareCustomDefinition(source));
+    } catch (error) {
+      console.error('Could not install a shared server definition:', error);
+    }
+  }
+  approveCustomFeatureScripts(preparedDefinitions.map(prepared => prepared.definition));
+  for (const prepared of preparedDefinitions) {
+    try {
+      installPreparedSharedDefinition(prepared, false);
     } catch (error) {
       console.error('Could not install a shared server definition:', error);
     }
@@ -4991,6 +5457,10 @@ async function loadServerCustomDefinitions(addr) {
 }
 async function installSharedDefinition(source, notify = true) {
   const prepared = await prepareCustomDefinition(source);
+  if (notify) approveCustomFeatureScripts([prepared.definition]);
+  installPreparedSharedDefinition(prepared, notify);
+}
+function installPreparedSharedDefinition(prepared, notify) {
   assertCustomDefinitionAvailable(prepared.definition);
   delete prepared.definition.pendingGrant;
   const existing = customDefinitionsById.get(prepared.definition.registry.id);
@@ -5332,6 +5802,9 @@ function breakBlock() {
   if (id === AIR || id === BEDROCK || isFluid(id)) return;
   const bx = target.x, by = target.y, bz = target.z;
   const customBlock = customBlockDefinitions.get(id);
+  const customDefinition = customDefinitionsById.get(id);
+  const heldStack = hotbar[selected];
+  const heldDefinition = heldStack && customDefinitionsById.get(heldStack.id);
   setBlock(bx, by, bz, AIR);
   rebuildAround(bx, by, bz);
   wakeFluid(bx, by, bz);
@@ -5355,6 +5828,16 @@ function breakBlock() {
     if (currentFurnaceKey === key) closeInventory();
   }
   target = null;
+  if (customDefinition) {
+    void runCustomFeatureHook(customDefinition, 'onBlockBreak', {
+      type: 'block', id, position: { x: bx, y: by, z: bz },
+    });
+  }
+  if (heldDefinition && heldDefinition !== customDefinition) {
+    void runCustomFeatureHook(heldDefinition, 'onBlockBreak', {
+      type: 'block', id, toolId: heldStack.id, position: { x: bx, y: by, z: bz },
+    });
+  }
 }
 function placeBlock() {
   if (!target || target.type !== 'block') return;
@@ -5407,6 +5890,12 @@ function placeBlock() {
     stack.count--;
     if (stack.count <= 0) hotbar[selected] = null;
     renderHotbar(); updateHandItem();
+  }
+  const customDefinition = customDefinitionsById.get(id);
+  if (customDefinition) {
+    void runCustomFeatureHook(customDefinition, 'onBlockPlace', {
+      type: 'block', id, position: { x, y, z },
+    });
   }
 }
 function inBounds2(x, y, z) {
@@ -5832,14 +6321,34 @@ function leaveToTitle(msg, isErr) {
 }
 
 /* ---------- PvP helpers (the Go server is authoritative) ---------- */
-function requestPvpAttack(targetId) {
+async function requestPvpAttack(targetId) {
   if (!pvpEnabled || !NET.role || pvpAttackCooldown > 0 || !Number.isInteger(targetId)) return;
   const weaponId = hotbar[selected] ? hotbar[selected].id : 0;
   const weapon = BLOCK_TYPES[weaponId];
   const custom = weapon && weapon.customDefinition && weapon.isTool;
-  pvpAttackCooldown = weapon && weapon.customDefinition ? Math.max(0.1, weapon.attackCooldown) : 0.55;
+  const definition = customDefinitionsById.get(weaponId);
+  pvpAttackCooldownDuration = weapon && weapon.customDefinition ? Math.max(0.1, weapon.attackCooldown) : 0.55;
+  pvpAttackCooldown = pvpAttackCooldownDuration;
+  updatePvpCooldownUI();
   const msg = { t: 'pvp-attack', id: targetId };
-  if (custom) { msg.dmg = weapon.damage; msg.reach = weapon.reach; msg.cd = weapon.attackCooldown; }
+  let damageMultiplier = 1, knockbackMultiplier = 1;
+  if (definition && definition.features) {
+    const target = remotePlayers.get(targetId);
+    const result = await runCustomFeatureHook(definition, 'onHit', {
+      type: 'player', id: targetId,
+      position: target ? { x: target.g.position.x, y: target.g.position.y, z: target.g.position.z } : null,
+    });
+    if (definition.features.capabilities.includes('combat') && result && typeof result === 'object') {
+      if (Number.isFinite(result.damageMultiplier)) damageMultiplier = Math.max(0, Math.min(10, result.damageMultiplier));
+      if (Number.isFinite(result.knockbackMultiplier)) knockbackMultiplier = Math.max(0, Math.min(3, result.knockbackMultiplier));
+    }
+  }
+  if (custom) {
+    msg.dmg = weapon.damage * damageMultiplier;
+    msg.reach = weapon.reach;
+    msg.cd = weapon.attackCooldown;
+    msg.kb = Math.max(0, Math.min(3, (weapon.knockbackMultiplier ?? 1) * knockbackMultiplier));
+  }
   if (NET.hostConn && NET.hostConn.open) NET.hostConn.send(msg);
 }
 function pvpRespawnPoint() {
@@ -5848,10 +6357,21 @@ function pvpRespawnPoint() {
   while (y > 1 && !isSolid(getBlock(x, y, z))) y--;
   return { x: x + 0.5, y: y + 1.2, z: z + 0.5 };
 }
-function applyPvpKnockback(x, z) {
-  player.vel.x += x * 5;
-  player.vel.y = Math.max(player.vel.y, 1.5);
-  player.vel.z += z * 5;
+function applyPvpKnockback(x, z, strength = pvpKnockback) {
+  const scale = Number.isFinite(strength) ? Math.max(0, Math.min(6, strength)) : 1;
+  if (scale === 0) return;
+  player.vel.x += x * 5 * scale;
+  player.vel.y = Math.max(player.vel.y, 1.5 * scale);
+  player.vel.z += z * 5 * scale;
+}
+function updatePvpCooldownUI() {
+  const visible = !!NET.role && pvpEnabled && menuState === 'game';
+  pvpCooldownEl.classList.toggle('on', visible);
+  pvpCooldownEl.classList.toggle('recharging', pvpAttackCooldown > 0);
+  const ready = pvpAttackCooldownDuration > 0
+    ? 1 - Math.max(0, pvpAttackCooldown) / pvpAttackCooldownDuration
+    : 1;
+  pvpCooldownFillEl.style.width = (Math.max(0, Math.min(1, ready)) * 100) + '%';
 }
 
 /* ---------- GUEST ---------- */
@@ -5892,13 +6412,42 @@ function guestHandle(d) {
       if (pvpEnabled && menuState === 'death' && NET.hostConn && NET.hostConn.open) {
         NET.hostConn.send({ t: 'pvp-dead' });
       }
-      updateStatus(); updatePauseUI();
+      updateStatus(); updatePauseUI(); updatePvpCooldownUI();
+      break;
+    case 'pvp-knockback':
+      if (Number.isFinite(d.value) && d.value >= 0 && d.value <= 2) pvpKnockback = d.value;
+      break;
+    case 'gamemode':
+      applyOnlineGameMode(d.mode);
+      break;
+    case 'grant': {
+      if (!Number.isInteger(d.id) || !BLOCK_TYPES[d.id] ||
+          !Number.isInteger(d.count) || d.count < 1 || d.count > 64) {
+        chatLine('', 'The server sent an invalid item grant.', true);
+        break;
+      }
+      const remaining = addToInventory(d.id, d.count);
+      renderHotbar();
+      if (inventoryOpen) renderInventory();
+      chatLine('', remaining
+        ? 'Inventory full; ' + remaining + ' item(s) could not be added.'
+        : 'Received ' + d.count + ' x ' + BLOCK_TYPES[d.id].name + '.', true);
+      break;
+    }
+    case 'teleport':
+      if (![d.x, d.y, d.z].every(Number.isFinite) ||
+          Math.abs(d.x) > WORLD_W || Math.abs(d.y) > MAX_Y + 100 || Math.abs(d.z) > WORLD_D) break;
+      player.pos.set(d.x, d.y, d.z);
+      player.vel.set(0, 0, 0);
+      fallStartY = null;
+      chatLine('', 'Teleported.', true);
       break;
     case 'pvp-health': {
       if (!Number.isInteger(d.id) || typeof d.dead !== 'boolean') break;
       if (d.id === NET.selfId) {
         if (typeof d.amount === 'number' && d.amount > 0 && health > 0) {
-          applyPvpKnockback(Number(d.knockX) || 0, Number(d.knockZ) || 0);
+          applyPvpKnockback(Number(d.knockX) || 0, Number(d.knockZ) || 0,
+            Number.isFinite(d.knockback) ? d.knockback : pvpKnockback);
           const attacker = cleanName(d.by) || 'another player';
           chatLine('', 'Hit by ' + attacker, true);
           damage(d.amount, 'Hit by ' + attacker, true);
@@ -5912,6 +6461,12 @@ function guestHandle(d) {
       }
       break;
     }
+    case 'pvp-heal':
+      if (d.id === NET.selfId && Number.isInteger(d.health) && d.health >= 0 && d.health <= MAX_HEALTH) {
+        health = d.health;
+        updateHealthBar();
+      }
+      break;
     case 'pvp-respawn': {
       if (![d.x, d.y, d.z].every(Number.isFinite) || !Number.isInteger(d.id)) break;
       if (d.id === NET.selfId) {
@@ -5965,6 +6520,19 @@ function guestHandle(d) {
       leaveToTitle('The server closed the room', true);
       break;
   }
+}
+function applyOnlineGameMode(mode) {
+  if ((mode !== 'survival' && mode !== 'creative') || mode === gameMode) return;
+  const wasCreative = gameMode === 'creative';
+  gameMode = mode;
+  if (mode === 'creative') giveCreativeItems();
+  else if (wasCreative) clearInventory();
+  renderHotbar();
+  if (inventoryOpen) renderInventory();
+  handCurrentId = -1;
+  updateHandItem();
+  updateStatus();
+  chatLine('', 'Server changed game mode to ' + mode + '.', true);
 }
 async function joinGame(code, name) {
   code = String(code || '').trim();
@@ -6026,6 +6594,9 @@ async function joinGame(code, name) {
     NET.selfId = welcome.id;
     NET.sim = welcome.sim === true;
     pvpEnabled = welcome.pvp === true;
+    pvpKnockback = Number.isFinite(welcome.pvpKnockback)
+      ? Math.max(0, Math.min(2, welcome.pvpKnockback))
+      : 1;
     worldTime = (typeof welcome.time === 'number') ? welcome.time : START_TIME;
     currentWorld = null;
 
@@ -6144,6 +6715,7 @@ const GRAVITY = 30, JUMP_VEL = 8.6;
 const WALK_SPD = 4.5, SPRINT_SPD = 7.2, CROUCH_MUL = 0.42, FLY_SPD = 11, SWIM_SPD_MUL = 0.75, LAVA_SPD_MUL = 0.3, REACH = 6;
 const forwardDir = new THREE.Vector3();
 let fpsTimer = 0, fpsFrames = 0, smoothedFps = 60, autoSaveTimer = 0;
+let customFeatureTickTimer = 0;
 let lavaSizzleTimer = 0;
 let waterTime = 0;
 let lastBiome = '';
@@ -6180,6 +6752,18 @@ function updateBreaking(dt) {
 function update(dt) {
   const locked = document.pointerLockElement === renderer.domElement;
   const playing = menuState === 'game' && locked;
+  if (playing) {
+    customFeatureTickTimer += dt;
+    if (customFeatureTickTimer >= 0.25) {
+      const tickDt = Math.min(1, customFeatureTickTimer);
+      customFeatureTickTimer = 0;
+      const heldStack = hotbar[selected];
+      const heldDefinition = heldStack && customDefinitionsById.get(heldStack.id);
+      if (heldDefinition) {
+        void runCustomFeatureHook(heldDefinition, 'onTick', { type: 'tick', dt: tickDt });
+      }
+    }
+  } else customFeatureTickTimer = 0;
   cloudTexture.offset.x += dt * 0.0016;
   cloudTexture.offset.y += dt * 0.0006;
   worldTime = (worldTime + dt / DAY_LENGTH_SEC) % 1;
@@ -6189,6 +6773,7 @@ function update(dt) {
   lavaUniforms.uTime.value = waterTime;
   if (breakCooldown > 0) breakCooldown -= dt;
   if (pvpAttackCooldown > 0) pvpAttackCooldown -= dt;
+  updatePvpCooldownUI();
   let sprinting = false;
 
   if (menuState === 'game' || menuState === 'pause') {

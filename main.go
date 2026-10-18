@@ -41,17 +41,18 @@ import (
 var indexHTML []byte
 
 const (
-	netVersion = 3 // must match NET_VERSION in index.html
-	worldW     = 5000
-	worldD     = 5000
-	maxY       = 100
-	maxPlayers = 8
-	editChunk  = 48000
-	maxHealth  = 20
-	pvpReach   = 4.2
-	pvpDamage  = 4
-	dayLength  = 20 * 60.0 // seconds per in-game day
-	startTime  = 0.30
+	netVersion          = 3 // must match NET_VERSION in index.html
+	worldW              = 5000
+	worldD              = 5000
+	maxY                = 100
+	maxPlayers          = 8
+	editChunk           = 48000
+	maxHealth           = 20
+	pvpReach            = 4.2
+	pvpDamage           = 4
+	defaultPvpKnockback = 1.0
+	dayLength           = 20 * 60.0 // seconds per in-game day
+	startTime           = 0.30
 )
 
 type M map[string]any
@@ -59,43 +60,49 @@ type M map[string]any
 // ---------------------------------------------------------------- types
 
 type player struct {
-	id         int
-	name       string
-	conn       *websocket.Conn
-	send       chan []byte
-	done       chan struct{}
-	joined     bool
-	x, y, z    float64
-	yaw, pitch float64
-	health     int
-	dead       bool
-	lastAttack time.Time
+	id               int
+	name             string
+	op               bool
+	conn             *websocket.Conn
+	send             chan []byte
+	done             chan struct{}
+	joined           bool
+	x, y, z          float64
+	yaw, pitch       float64
+	health           int
+	dead             bool
+	lastAttack       time.Time
+	lastHealthEffect time.Time
 }
 
 // inMsg is every message a client can send; unused fields stay zero.
 type inMsg struct {
-	T     string  `json:"t"`
-	V     int     `json:"v"`
-	Name  string  `json:"name"`
-	X     float64 `json:"x"`
-	Y     float64 `json:"y"`
-	Z     float64 `json:"z"`
-	Yaw   float64 `json:"yaw"`
-	Pitch float64 `json:"pitch"`
-	ID    float64 `json:"id"`
-	M     string  `json:"m"`
-	Dmg   float64 `json:"dmg"` // custom weapon stats (optional)
-	Reach float64 `json:"reach"`
-	Cd    float64 `json:"cd"`
+	T      string   `json:"t"`
+	V      int      `json:"v"`
+	Name   string   `json:"name"`
+	X      float64  `json:"x"`
+	Y      float64  `json:"y"`
+	Z      float64  `json:"z"`
+	Yaw    float64  `json:"yaw"`
+	Pitch  float64  `json:"pitch"`
+	ID     float64  `json:"id"`
+	M      string   `json:"m"`
+	Dmg    float64  `json:"dmg"` // custom weapon stats (optional)
+	Reach  float64  `json:"reach"`
+	Cd     float64  `json:"cd"`
+	KB     *float64 `json:"kb"`
+	Heal   float64  `json:"heal"`
+	Damage float64  `json:"damage"`
 }
 
 type saveFile struct {
-	Seed  int32       `json:"seed"`
-	Mode  string      `json:"mode"`
-	Time  float64     `json:"time"`
-	PVP   bool        `json:"pvp"`
-	Spawn *[3]float64 `json:"spawn,omitempty"`
-	Edits []byte      `json:"edits"` // 5 bytes per edit: uint32 LE voxel index + block id
+	Seed         int32       `json:"seed"`
+	Mode         string      `json:"mode"`
+	Time         float64     `json:"time"`
+	PVP          bool        `json:"pvp"`
+	PvPKnockback *float64    `json:"pvpKnockback,omitempty"`
+	Spawn        *[3]float64 `json:"spawn,omitempty"`
+	Edits        []byte      `json:"edits"` // 5 bytes per edit: uint32 LE voxel index + block id
 }
 
 type server struct {
@@ -104,6 +111,7 @@ type server struct {
 	seed           int32
 	mode           string
 	pvp            bool
+	pvpKnockback   float64
 	wtime          float64
 	spawn          *[3]float64
 	edits          map[uint32]uint8
@@ -270,6 +278,7 @@ func (s *server) join(p *player, m *inMsg) {
 	p.id = s.nextID
 	p.name = s.uniqueName(cleanName(m.Name), p.id)
 	p.health = maxHealth
+	p.op = !s.hasOp()
 	if s.spawn != nil {
 		p.x, p.y, p.z = s.spawn[0], s.spawn[1], s.spawn[2]
 	}
@@ -286,7 +295,7 @@ func (s *server) join(p *player, m *inMsg) {
 	nChunks := (len(eb) + editChunk - 1) / editChunk
 	welcome := M{
 		"t": "welcome", "id": p.id, "seed": s.seed, "mode": s.mode, "time": s.wtime,
-		"pvp": s.pvp, "players": plist, "editBytes": len(eb), "chunks": nChunks,
+		"pvp": s.pvp, "pvpKnockback": s.pvpKnockback, "players": plist, "editBytes": len(eb), "chunks": nChunks,
 		"sim": s.simID == p.id, "spawn": nil,
 	}
 	if s.spawn != nil {
@@ -303,6 +312,9 @@ func (s *server) join(p *player, m *inMsg) {
 
 	p.joined = true
 	s.players[p.id] = p
+	if p.op {
+		s.sys(p, "You are a server operator. Use /help to see commands.")
+	}
 	s.broadcast(M{"t": "j", "id": p.id, "name": p.name}, p)
 	log.Printf("+ %s joined (id %d, %d players)", p.name, p.id, len(s.players))
 }
@@ -327,6 +339,9 @@ func (s *server) drop(p *player) {
 		if q := s.players[s.simID]; q != nil {
 			s.sendTo(q, M{"t": "sim", "on": true})
 		}
+	}
+	if p.op {
+		s.promoteOperator()
 	}
 	s.dirty = true
 	if len(s.players) == 0 {
@@ -362,6 +377,10 @@ func (s *server) handle(p *player, m *inMsg) {
 		if isInt(m.ID) {
 			s.pvpAttack(p, int(m.ID), m)
 		}
+	case "pvp-heal":
+		s.pvpHeal(p, m.Heal)
+	case "pvp-damage":
+		s.pvpDamage(p, m.Damage)
 	case "pvp-dead":
 		if s.pvp {
 			p.dead, p.health = true, 0
@@ -409,12 +428,74 @@ func (s *server) onBlock(p *player, m *inMsg) {
 }
 
 func (s *server) isOp(p *player) bool {
-	for id := range s.players {
-		if id < p.id {
-			return false
+	return p != nil && p.op
+}
+
+func (s *server) hasOp() bool {
+	for _, q := range s.players {
+		if q.op {
+			return true
 		}
 	}
-	return true
+	return false
+}
+
+func (s *server) promoteOperator() {
+	if s.hasOp() {
+		return
+	}
+	var next *player
+	for _, q := range s.players {
+		if next == nil || q.id < next.id {
+			next = q
+		}
+	}
+	if next != nil {
+		next.op = true
+		s.sys(next, "You are now a server operator. Use /help to see commands.")
+	}
+}
+
+func (s *server) findPlayer(name string) *player {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "@s") || strings.EqualFold(name, "self") {
+		return nil
+	}
+	for _, q := range s.players {
+		if strings.EqualFold(q.name, name) {
+			return q
+		}
+	}
+	return nil
+}
+
+func (s *server) setPvP(enabled bool) {
+	s.pvp = enabled
+	for _, q := range s.players {
+		q.dead, q.health = false, maxHealth
+	}
+	s.broadcast(M{"t": "pvp-mode", "enabled": s.pvp}, nil)
+}
+
+func (s *server) setGameMode(mode string) {
+	s.mode = mode
+	s.dirty = true
+	s.broadcast(M{"t": "gamemode", "mode": mode}, nil)
+}
+
+func (s *server) setWorldTime(value float64) {
+	s.wtime = math.Mod(value, 1)
+	if s.wtime < 0 {
+		s.wtime++
+	}
+	s.dirty = true
+	s.broadcast(M{"t": "tm", "time": s.wtime}, nil)
+}
+
+func (s *server) setPvPKnockback(value float64) {
+	s.pvpKnockback = math.Max(0, math.Min(2, value))
+	s.dirty = true
+	s.broadcast(M{"t": "pvp-knockback", "value": s.pvpKnockback}, nil)
 }
 
 func (s *server) onChat(p *player, m *inMsg) {
@@ -435,32 +516,280 @@ func (s *server) onChat(p *player, m *inMsg) {
 }
 
 func (s *server) command(p *player, text string) {
-	f := strings.Fields(strings.ToLower(text))
-	switch f[0] {
-	case "/pvp":
-		if !s.isOp(p) {
-			s.sys(p, "Only the first player in the room can toggle PvP")
-			return
-		}
-		on := !s.pvp
-		if len(f) > 1 {
-			on = f[1] == "on"
-		}
-		s.pvp = on
-		s.dirty = true
-		for _, q := range s.players {
-			q.dead, q.health = false, maxHealth
-		}
-		s.broadcast(M{"t": "pvp-mode", "enabled": s.pvp}, nil)
+	f := strings.Fields(strings.TrimSpace(text))
+	if len(f) == 0 {
+		return
+	}
+	cmd := strings.ToLower(f[0])
+	switch cmd {
+	case "/help", "/commands":
+		s.sys(p, "Commands: /list, /pvp [on|off], /knockback <0-200>, /gamemode <survival|creative>, /time [query|set <time>|day|night|noon|midnight], /give [player] <item|id> [amount], /op [player], /deop <player>, /tp <player>.")
 	case "/list":
-		names := []string{}
+		names := make([]string, 0, len(s.players))
 		for _, q := range s.players {
-			names = append(names, q.name)
+			suffix := ""
+			if q.op {
+				suffix = " (op)"
+			}
+			names = append(names, q.name+suffix)
 		}
 		s.sys(p, fmt.Sprintf("Players (%d/%d): %s", len(names), maxPlayers, strings.Join(names, ", ")))
+	case "/op":
+		if !s.isOp(p) {
+			s.sys(p, "Only an operator can use this command.")
+			return
+		}
+		if len(f) == 1 {
+			s.sys(p, "You are "+map[bool]string{true: "an operator.", false: "not an operator."}[p.op])
+			return
+		}
+		target := s.findPlayer(strings.Join(f[1:], " "))
+		if target == nil {
+			s.sys(p, "Player not found. Usage: /op <player>")
+			return
+		}
+		if target.op {
+			s.sys(p, target.name+" is already an operator.")
+			return
+		}
+		target.op = true
+		s.sys(target, "You are now a server operator.")
+		s.broadcast(M{"t": "c", "n": "Server", "m": target.name + " is now an operator."}, nil)
+	case "/deop":
+		if !s.isOp(p) {
+			s.sys(p, "Only an operator can use this command.")
+			return
+		}
+		target := s.findPlayer(strings.Join(f[1:], " "))
+		if target == nil {
+			s.sys(p, "Player not found. Usage: /deop <player>")
+			return
+		}
+		if !target.op {
+			s.sys(p, target.name+" is not an operator.")
+			return
+		}
+		opCount := 0
+		for _, q := range s.players {
+			if q.op {
+				opCount++
+			}
+		}
+		if target == p && opCount == 1 {
+			s.sys(p, "You cannot remove the only operator.")
+			return
+		}
+		target.op = false
+		s.sys(target, "Your server operator privileges were removed.")
+		s.broadcast(M{"t": "c", "n": "Server", "m": target.name + " is no longer an operator."}, nil)
+	case "/pvp":
+		if !s.requireOp(p) {
+			return
+		}
+		on, valid := parseToggle(f[1:], s.pvp)
+		if !valid {
+			s.sys(p, "Usage: /pvp [on|off]")
+			return
+		}
+		s.setPvP(on)
+		s.dirty = true
+		s.sys(p, "PvP "+toggleText(s.pvp)+".")
+	case "/knockback", "/pvpknockback":
+		if !s.requireOp(p) {
+			return
+		}
+		if len(f) != 2 {
+			s.sys(p, fmt.Sprintf("PvP knockback is %.0f%%. Usage: /knockback <0-200>", s.pvpKnockback*100))
+			return
+		}
+		percent, err := strconv.ParseFloat(f[1], 64)
+		if err != nil || math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 || percent > 200 {
+			s.sys(p, "Usage: /knockback <0-200> (percent)")
+			return
+		}
+		s.setPvPKnockback(percent / 100)
+		s.sys(p, fmt.Sprintf("PvP knockback set to %.0f%%.", s.pvpKnockback*100))
+	case "/gamemode", "/mode", "/gmode", "/gmc", "/gms":
+		if !s.requireOp(p) {
+			return
+		}
+		mode := ""
+		switch cmd {
+		case "/gmc":
+			mode = "creative"
+		case "/gms":
+			mode = "survival"
+		default:
+			if len(f) > 1 {
+				mode = strings.ToLower(f[1])
+			}
+		}
+		if mode != "survival" && mode != "creative" {
+			s.sys(p, "Usage: /gamemode <survival|creative> (aliases: /gms, /gmc)")
+			return
+		}
+		s.setGameMode(mode)
+		s.sys(p, "Game mode set to "+mode+".")
+	case "/time":
+		if !s.requireOp(p) {
+			return
+		}
+		if len(f) == 1 || strings.EqualFold(f[1], "query") {
+			s.sys(p, fmt.Sprintf("World time: %s", formatWorldTime(s.wtime)))
+			return
+		}
+		value, ok := parseWorldTime(f[1:])
+		if !ok {
+			s.sys(p, "Usage: /time set <HH:MM|0-23|day|night|noon|midnight>")
+			return
+		}
+		s.setWorldTime(value)
+		s.sys(p, "World time set to "+formatWorldTime(s.wtime)+".")
+	case "/give":
+		if !s.requireOp(p) {
+			return
+		}
+		args := f[1:]
+		target, itemAt := p, 0
+		if len(args) > 0 && (args[0] == "@s" || strings.EqualFold(args[0], "self")) {
+			itemAt = 1
+		} else {
+			for end := len(args) - 1; end > 0; end-- {
+				if found := s.findPlayer(strings.Join(args[:end], " ")); found != nil {
+					target, itemAt = found, end
+					break
+				}
+			}
+		}
+		if itemAt >= len(args) {
+			s.sys(p, "Usage: /give [player] <item-id|name> [amount]")
+			return
+		}
+		itemArgs := args[itemAt:]
+		count := 1
+		if len(itemArgs) > 1 {
+			if parsed, err := strconv.Atoi(itemArgs[len(itemArgs)-1]); err == nil {
+				if parsed < 1 || parsed > 64 {
+					s.sys(p, "Item amount must be from 1 to 64.")
+					return
+				}
+				count = parsed
+				itemArgs = itemArgs[:len(itemArgs)-1]
+			}
+		}
+		itemID, ok := parseItemID(strings.Join(itemArgs, " "))
+		if !ok {
+			s.sys(p, "Unknown item. Use a built-in item name or numeric item ID.")
+			return
+		}
+		s.sendTo(target, M{"t": "grant", "id": itemID, "count": count})
+		s.sys(p, fmt.Sprintf("Gave %s %d x item %d.", target.name, count, itemID))
+	case "/tp", "/teleport":
+		if !s.requireOp(p) {
+			return
+		}
+		target := s.findPlayer(strings.Join(f[1:], " "))
+		if target == nil {
+			s.sys(p, "Usage: /tp <online-player>")
+			return
+		}
+		s.sendTo(p, M{"t": "teleport", "x": target.x, "y": target.y, "z": target.z})
+		s.sys(p, "Teleported to "+target.name+".")
 	default:
-		s.sys(p, "Commands: /pvp [on|off], /list")
+		s.sys(p, "Unknown command. Type /help for available commands.")
 	}
+}
+
+func (s *server) requireOp(p *player) bool {
+	if s.isOp(p) {
+		return true
+	}
+	s.sys(p, "Only an operator can use this command.")
+	return false
+}
+
+func parseToggle(args []string, current bool) (bool, bool) {
+	if len(args) == 0 {
+		return !current, true
+	}
+	if len(args) != 1 {
+		return current, false
+	}
+	switch strings.ToLower(args[0]) {
+	case "on", "true", "yes":
+		return true, true
+	case "off", "false", "no":
+		return false, true
+	default:
+		return current, false
+	}
+}
+
+func toggleText(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func parseWorldTime(args []string) (float64, bool) {
+	if len(args) == 0 || (len(args) == 1 && strings.EqualFold(args[0], "query")) {
+		return 0, false
+	}
+	if len(args) > 1 && !strings.EqualFold(args[0], "set") {
+		return 0, false
+	}
+	value := args[len(args)-1]
+	switch strings.ToLower(value) {
+	case "day", "sunrise":
+		return 0.25, true
+	case "noon":
+		return 0.5, true
+	case "night", "sunset":
+		return 0.75, true
+	case "midnight":
+		return 0, true
+	}
+	if strings.Contains(value, ":") {
+		parsed, err := time.Parse("15:04", value)
+		if err != nil {
+			return 0, false
+		}
+		minutes := parsed.Hour()*60 + parsed.Minute()
+		return float64(minutes) / (24 * 60), true
+	}
+	hour, err := strconv.ParseFloat(value, 64)
+	if err != nil || math.IsNaN(hour) || math.IsInf(hour, 0) || hour < 0 || hour >= 24 {
+		return 0, false
+	}
+	return hour / 24, true
+}
+
+func formatWorldTime(value float64) string {
+	minutes := int(math.Mod(value, 1) * 24 * 60)
+	return fmt.Sprintf("%02d:%02d", minutes/60, minutes%60)
+}
+
+func parseItemID(value string) (int, bool) {
+	if id, err := strconv.Atoi(value); err == nil {
+		return id, id > 0 && id <= 65535
+	}
+	item := strings.ToLower(strings.ReplaceAll(value, "_", " "))
+	itemIDs := map[string]int{
+		"grass": 1, "dirt": 2, "stone": 3, "sand": 4, "log": 5, "leaves": 6,
+		"planks": 7, "brick": 8, "bedrock": 9, "sandstone": 10, "stone bricks": 11,
+		"crafting table": 12, "door": 13, "water": 14, "iron ore": 15, "gold ore": 16,
+		"diamond ore": 17, "ruby ore": 18, "emerald ore": 19, "furnace": 20, "coal ore": 21,
+		"lava": 22, "mycelium": 23, "mushroom stem": 24, "red mushroom cap": 25,
+		"brown mushroom cap": 26, "red mushroom": 27, "brown mushroom": 28, "tall grass": 29,
+		"gravel": 99, "stick": 100, "wood pickaxe": 101, "stone pickaxe": 102,
+		"iron pickaxe": 103, "gold pickaxe": 104, "diamond pickaxe": 105, "fish": 106,
+		"coal": 107, "raw iron": 108, "raw gold": 109, "iron ingot": 110,
+		"gold ingot": 111, "diamond": 112, "ruby": 113, "emerald": 114, "torch": 115,
+		"water bucket": 116, "lava bucket": 117, "bucket": 118,
+	}
+	id, ok := itemIDs[item]
+	return id, ok
 }
 
 // ---------------------------------------------------------------- PvP
@@ -496,6 +825,10 @@ func (s *server) pvpAttack(a *player, targetID int, m *inMsg) {
 	}
 	kx, kz = kx/l, kz/l
 	damage := int(math.Round(clampF(m.Dmg, 1, maxHealth, pvpDamage)))
+	knockbackMultiplier := 1.0
+	if m.KB != nil && !math.IsNaN(*m.KB) && !math.IsInf(*m.KB, 0) {
+		knockbackMultiplier = math.Max(0, math.Min(3, *m.KB))
+	}
 	t.health -= damage
 	if t.health < 0 {
 		t.health = 0
@@ -503,10 +836,42 @@ func (s *server) pvpAttack(a *player, targetID int, m *inMsg) {
 	t.dead = t.health <= 0
 	upd := func(amount int) M {
 		return M{"t": "pvp-health", "id": t.id, "amount": amount, "by": a.name,
-			"health": t.health, "dead": t.dead, "knockX": kx, "knockZ": kz}
+			"health": t.health, "dead": t.dead, "knockX": kx, "knockZ": kz,
+			"knockback": s.pvpKnockback * knockbackMultiplier}
 	}
 	s.sendTo(t, upd(damage))
 	s.broadcast(upd(0), t)
+}
+
+func (s *server) pvpHeal(p *player, amount float64) {
+	if !s.pvp || p.dead || math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 1 || amount > 4 {
+		return
+	}
+	now := time.Now()
+	if now.Sub(p.lastHealthEffect) < time.Second || p.health >= maxHealth {
+		return
+	}
+	p.lastHealthEffect = now
+	p.health = min(maxHealth, p.health+int(math.Round(amount)))
+	s.sendTo(p, M{"t": "pvp-heal", "id": p.id, "health": p.health})
+}
+
+func (s *server) pvpDamage(p *player, amount float64) {
+	if !s.pvp || p.dead || math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 1 || amount > 4 {
+		return
+	}
+	now := time.Now()
+	if now.Sub(p.lastHealthEffect) < time.Second {
+		return
+	}
+	p.lastHealthEffect = now
+	damage := int(math.Round(amount))
+	p.health = max(0, p.health-damage)
+	p.dead = p.health == 0
+	s.sendTo(p, M{
+		"t": "pvp-health", "id": p.id, "amount": damage, "health": p.health,
+		"dead": p.dead, "by": "Custom item effect", "knockX": 0, "knockZ": 0, "knockback": 0,
+	})
 }
 
 func (s *server) pvpRespawn(p *player) {
@@ -725,9 +1090,9 @@ func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
 			(metadata.Kind != "tool" && metadata.Kind != "block") ||
 			strings.TrimSpace(metadata.Name) == "" || metadata.Registry.ID > 65535 ||
 			(metadata.Kind == "block" && metadata.Registry.ID > 255) ||
-			(metadata.Kind == "tool" && metadata.Registry.ID < 119) ||
+			(metadata.Kind == "tool" && metadata.Registry.ID < 120) ||
 			(metadata.Kind == "block" && (metadata.Registry.ID < 30 ||
-				metadata.Registry.ID == 99 || (metadata.Registry.ID >= 100 && metadata.Registry.ID <= 118))) {
+				metadata.Registry.ID == 99 || (metadata.Registry.ID >= 100 && metadata.Registry.ID <= 119))) {
 			writeAPIError(w, http.StatusBadRequest, "Invalid item/block definition JSON.")
 			return
 		}
@@ -764,6 +1129,65 @@ func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	setAPICORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == http.MethodGet {
+		s.mu.Lock()
+		settings := M{"mode": s.mode, "pvp": s.pvp, "time": s.wtime, "pvpKnockback": s.pvpKnockback}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(settings); err != nil {
+			log.Println("could not return server settings:", err)
+		}
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "Use GET or POST for server settings.")
+		return
+	}
+	if s.operatorCode == "" {
+		writeAPIError(w, http.StatusServiceUnavailable, "Server operator access is not configured.")
+		return
+	}
+	authorized, blocked := s.checkOperatorCode(r, r.Header.Get("X-Server-Op-Code"))
+	if blocked {
+		writeAPIError(w, http.StatusTooManyRequests, "Too many incorrect operator-code attempts. Try again later.")
+		return
+	}
+	if !authorized {
+		writeAPIError(w, http.StatusUnauthorized, "Server operator access is required.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var settings struct {
+		Mode         string   `json:"mode"`
+		PvP          *bool    `json:"pvp"`
+		Time         *float64 `json:"time"`
+		PvPKnockback *float64 `json:"pvpKnockback"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil ||
+		(settings.Mode != "survival" && settings.Mode != "creative") ||
+		settings.PvP == nil || settings.Time == nil || settings.PvPKnockback == nil ||
+		math.IsNaN(*settings.Time) || math.IsInf(*settings.Time, 0) ||
+		*settings.Time < 0 || *settings.Time >= 1 ||
+		math.IsNaN(*settings.PvPKnockback) || math.IsInf(*settings.PvPKnockback, 0) ||
+		*settings.PvPKnockback < 0 || *settings.PvPKnockback > 2 {
+		writeAPIError(w, http.StatusBadRequest, "Provide a valid mode, PvP setting, time from 0 to 1, and knockback from 0 to 2.")
+		return
+	}
+	s.mu.Lock()
+	s.setGameMode(settings.Mode)
+	s.setPvP(*settings.PvP)
+	s.setWorldTime(*settings.Time)
+	s.setPvPKnockback(*settings.PvPKnockback)
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---------------------------------------------------------------- time + persistence
 
 func (s *server) loop() {
@@ -791,7 +1215,11 @@ func (s *server) save(force bool) {
 		s.mu.Unlock()
 		return
 	}
-	sf := saveFile{Seed: s.seed, Mode: s.mode, Time: s.wtime, PVP: s.pvp, Spawn: s.spawn, Edits: s.encodeEdits()}
+	knockback := s.pvpKnockback
+	sf := saveFile{
+		Seed: s.seed, Mode: s.mode, Time: s.wtime, PVP: s.pvp,
+		PvPKnockback: &knockback, Spawn: s.spawn, Edits: s.encodeEdits(),
+	}
 	s.dirty = false
 	path := s.savePath
 	s.mu.Unlock()
@@ -824,6 +1252,11 @@ func (s *server) load() bool {
 		return false
 	}
 	s.seed, s.mode, s.wtime, s.pvp, s.spawn = sf.Seed, sf.Mode, sf.Time, sf.PVP, sf.Spawn
+	s.pvpKnockback = defaultPvpKnockback
+	if sf.PvPKnockback != nil && !math.IsNaN(*sf.PvPKnockback) &&
+		!math.IsInf(*sf.PvPKnockback, 0) && *sf.PvPKnockback >= 0 && *sf.PvPKnockback <= 2 {
+		s.pvpKnockback = *sf.PvPKnockback
+	}
 	for o := 0; o+5 <= len(sf.Edits); o += 5 {
 		s.edits[binary.LittleEndian.Uint32(sf.Edits[o:o+4])] = sf.Edits[o+4]
 	}
@@ -904,6 +1337,7 @@ func main() {
 		savePath:       *save,
 		definitionsDir: *definitionsDir,
 		operatorCode:   *operatorCode,
+		pvpKnockback:   defaultPvpKnockback,
 		wtime:          startTime,
 	}
 	if err := os.MkdirAll(s.definitionsDir, 0o755); err != nil {
@@ -945,6 +1379,7 @@ func main() {
 	http.HandleFunc("/ws", s.handleWS)
 	http.HandleFunc("/api/operator", s.handleOperator)
 	http.HandleFunc("/api/definitions", s.handleDefinitions)
+	http.HandleFunc("/api/settings", s.handleSettings)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)

@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Co-op Sprite Studio</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, Segoe UI, sans-serif; background: #11151a; color: #eef2f5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; }
+  header { padding: 22px clamp(16px, 4vw, 48px); background: #1a2229; border-bottom: 1px solid #34414b; }
+  h1 { margin: 0; font-size: 23px; letter-spacing: .04em; }
+  header p { margin: 6px 0 0; color: #aebbc4; font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(300px, 1.15fr) minmax(300px, .85fr); gap: 18px; max-width: 1180px; margin: 22px auto; padding: 0 18px 36px; }
+  section { background: #1a2229; border: 1px solid #34414b; border-radius: 10px; padding: 18px; min-width: 0; }
+  h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: .12em; color: #b8d6c1; }
+  h3 { margin: 18px 0 8px; font-size: 13px; }
+  .editor-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(128px, .42fr); gap: 16px; align-items: start; }
+  canvas { image-rendering: pixelated; }
+  #sprite { display: block; width: min(100%, 512px); aspect-ratio: 1; height: auto; margin: 0 auto; border: 1px solid #60727e; background-color: #222a30; background-image: linear-gradient(45deg,#2c353c 25%,transparent 25%),linear-gradient(-45deg,#2c353c 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#2c353c 75%),linear-gradient(-45deg,transparent 75%,#2c353c 75%); background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0; cursor: crosshair; touch-action: none; }
+  #preview { display: block; width: 128px; height: 128px; margin: 0 auto; border: 1px solid #60727e; image-rendering: pixelated; background: #293139; }
+  .field-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+  .recipe-grid { display: grid; grid-template-columns: repeat(3, minmax(58px, 82px)); gap: 6px; margin: 10px 0; }
+  .recipe-grid input { text-align: center; }
+  label { display: block; color: #c3cdd3; font-size: 12px; }
+  input, select, textarea, button { font: inherit; }
+  input[type="text"], input[type="number"], select, textarea { width: 100%; margin-top: 5px; padding: 9px 10px; color: #f4f6f8; background: #10161b; border: 1px solid #45535e; border-radius: 6px; }
+  input[type="number"] { min-height: 38px; }
+  input[type="color"] { width: 100%; height: 38px; margin-top: 5px; padding: 3px; border: 1px solid #45535e; border-radius: 6px; background: #10161b; }
+  textarea { min-height: 122px; resize: vertical; font: 12px/1.5 Consolas, monospace; }
+  .toolbar, .actions, .palette { display: flex; flex-wrap: wrap; gap: 8px; }
+  .toolbar { justify-content: center; margin: 12px 0; }
+  button { cursor: pointer; color: #f4f6f8; background: #303d46; border: 1px solid #53636e; border-radius: 6px; padding: 8px 11px; }
+  button:hover { background: #40515b; }
+  button.active, .primary { background: #376c49; border-color: #5d9970; }
+  .palette { margin: 10px 0 14px; }
+  .swatch { width: 27px; height: 27px; padding: 0; border: 2px solid #6c7b84; }
+  .swatch.selected { outline: 2px solid #fff; outline-offset: 1px; }
+  .hint, .muted { color: #9eabb3; font-size: 12px; line-height: 1.5; }
+  .mesh-box { border: 1px dashed #53636e; border-radius: 8px; padding: 12px; margin-top: 8px; }
+  model-viewer { width: 100%; height: 220px; margin-top: 8px; background: #10161b; border-radius: 6px; }
+  .actions { margin-top: 16px; }
+  .actions button { flex: 1; min-width: 130px; }
+  pre { overflow: auto; max-height: 310px; padding: 12px; background: #10161b; border: 1px solid #34414b; border-radius: 6px; color: #d7e4dc; font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .hidden { display: none !important; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .editor-grid { grid-template-columns: minmax(0,1fr) 112px; } #preview { width: 100%; height: auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Co-op Sprite Studio</h1>
+  <p>Draw pixel sprites, configure item or block mechanics, add JavaScript features, and export one definition or a multi-item pack.</p>
+</header>
+<main>
+  <section>
+    <h2>Sprite canvas</h2>
+    <div class="editor-grid">
+      <div>
+        <canvas id="sprite" width="512" height="512" aria-label="Pixel sprite drawing area"></canvas>
+        <div class="toolbar">
+          <button type="button" data-tool="pen" class="active">Pen</button>
+          <button type="button" data-tool="eraser">Eraser</button>
+          <button type="button" id="undo">Undo</button>
+          <button type="button" id="clear">Clear</button>
+        </div>
+      </div>
+      <div>
+        <canvas id="preview" width="128" height="128" aria-label="Sprite preview"></canvas>
+        <label for="size">Pixel size
+          <select id="size"><option>16</option><option>32</option><option>64</option></select>
+        </label>
+        <label for="color" style="margin-top:12px">Selected color
+          <input id="color" type="color" value="#7dbb62">
+        </label>
+      </div>
+    </div>
+    <div class="palette" id="palette" aria-label="Color palette"></div>
+    <p class="hint">Click or drag to draw. Transparent pixels stay transparent. Use Undo to step back through edits.</p>
+    <h3>Optional 3D mesh</h3>
+    <div class="mesh-box">
+      <label for="mesh-file">Import a binary glTF mesh (.glb, up to 20 MB)
+        <input id="mesh-file" type="file" accept=".glb,model/gltf-binary">
+      </label>
+      <div id="mesh-info" class="muted" style="margin-top:8px">No mesh imported.</div>
+      <model-viewer id="mesh-view" class="hidden" camera-controls auto-rotate shadow-intensity="1" aria-label="Imported 3D mesh preview"></model-viewer>
+      <button type="button" id="remove-mesh" class="hidden" style="margin-top:8px">Remove mesh</button>
+      <p class="hint">The .glb is embedded in the exported HTML. Mesh preview uses Google's model-viewer library and needs an internet connection.</p>
+    </div>
+  </section>
+  <section>
+    <h2>Item / block definition</h2>
+    <div class="field-grid">
+      <label for="name">Display name<input id="name" type="text" maxlength="48" value="New Tool"></label>
+      <label for="kind">Definition type<select id="kind"><option value="tool">Tool / weapon</option><option value="block">Placeable block</option></select></label>
+      <label for="registry-id">Numeric registry ID<input id="registry-id" type="number" min="30" max="65535" step="1" value="120"></label>
+      <label for="registry-key">Internal key<input id="registry-key" type="text" maxlength="48" value="new_tool"></label>
+      <label for="category">Creative/inventory category<input id="category" type="text" maxlength="32" value="tools"></label>
+      <label for="atlas-index">New texture atlas tile (54–127)<input id="atlas-index" type="number" min="54" max="127" step="1" value="54"></label>
+    </div>
+    <div id="tool-fields">
+      <h3>Tool combat & use</h3>
+      <div class="field-grid">
+        <label for="tool-type">Tool type<select id="tool-type"><option value="pickaxe">Pickaxe</option><option value="axe">Axe</option><option value="shovel">Shovel</option><option value="hoe">Hoe</option><option value="sword">Sword</option><option value="none">No mining specialization</option></select></label>
+        <label for="damage">Base damage<input id="damage" type="number" min="0" max="1000" step="0.5" value="4"></label>
+        <label for="cooldown">Attack cooldown (seconds)<input id="cooldown" type="number" min="0" max="60" step="0.05" value="0.55"></label>
+        <label for="knockback">Knockback multiplier<input id="knockback" type="number" min="0" max="3" step="0.05" value="1"></label>
+        <label for="reach">Reach (blocks)<input id="reach" type="number" min="0" max="32" step="0.1" value="4"></label>
+        <label for="durability">Durability (uses)<input id="durability" type="number" min="1" max="1000000" step="1" value="100"></label>
+        <label for="mining-speed">Mining speed multiplier<input id="mining-speed" type="number" min="0" max="100" step="0.1" value="1"></label>
+        <label for="harvest-level">Harvest level<input id="harvest-level" type="number" min="0" max="255" step="1" value="0"></label>
+        <label for="max-stack">Maximum stack size<input id="max-stack" type="number" min="1" max="64" step="1" value="1"></label>
+        <label for="test-hardness">Example block hardness (for time estimate)<input id="test-hardness" type="number" min="0" max="1000000" step="0.1" value="3"></label>
+      </div>
+      <p class="hint" id="tool-time-preview"></p>
+    </div>
+    <div id="block-fields" class="hidden">
+      <h3>Block placement & mining</h3>
+      <div class="field-grid">
+        <label for="hardness">Hardness / base mining time (seconds)<input id="hardness" type="number" min="0" max="1000000" step="0.1" value="1"></label>
+        <label for="unbreakable">Mining resistance<select id="unbreakable"><option value="false">Breakable</option><option value="true">Unbreakable (infinite hardness)</option></select></label>
+        <label for="effective-tool">Effective tool<select id="effective-tool"><option value="none">No special tool</option><option value="pickaxe">Pickaxe</option><option value="axe">Axe</option><option value="shovel">Shovel</option><option value="hoe">Hoe</option><option value="shears">Shears</option></select></label>
+        <label for="block-tool-speed">Mining speed with effective tool<input id="block-tool-speed" type="number" min="0" max="100" step="0.1" value="1"></label>
+        <label for="block-test-tool">Use effective tool in estimate<select id="block-test-tool"><option value="true">Yes</option><option value="false">No / wrong tool</option></select></label>
+        <label for="block-stack">Maximum stack size<input id="block-stack" type="number" min="1" max="64" step="1" value="64"></label>
+        <label for="drop-item">Drop item ID<input id="drop-item" type="text" maxlength="48" value="self"></label>
+        <label for="drop-count">Drop count<input id="drop-count" type="number" min="0" max="64" step="1" value="1"></label>
+        <label for="solid">Collision / solid<select id="solid"><option value="true">Solid</option><option value="false">Non-solid</option></select></label>
+        <label for="transparent">Transparent<select id="transparent"><option value="false">No</option><option value="true">Yes</option></select></label>
+        <label for="light">Light emitted (0–15)<input id="light" type="number" min="0" max="15" step="1" value="0"></label>
+      </div>
+      <p class="hint" id="block-time-preview"></p>
+    </div>
+    <h3>Crafting / smelting recipe</h3>
+    <div class="field-grid">
+      <label for="recipe-type">Recipe type<select id="recipe-type"><option value="none">No recipe</option><option value="shaped">Shaped crafting</option><option value="shapeless">Shapeless crafting</option><option value="smelting">Furnace smelting</option></select></label>
+      <label for="recipe-result-count">Output count<input id="recipe-result-count" type="number" min="1" max="64" step="1" value="1"></label>
+      <label for="recipe-station">Crafting station<select id="recipe-station"><option value="inventory">2×2 inventory grid</option><option value="crafting_table">3×3 crafting table</option><option value="furnace">Furnace</option></select></label>
+      <label for="recipe-grid-size">Crafting grid size<select id="recipe-grid-size"><option value="2">2×2</option><option value="3" selected>3×3</option></select></label>
+    </div>
+    <div id="shaped-recipe">
+      <p class="hint">Shaped ingredients use numeric item/block IDs. Use 0 for an empty cell.</p>
+      <div class="recipe-grid" id="recipe-pattern">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 1 column 1">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 1 column 2">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 1 column 3">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 2 column 1">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 2 column 2">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 2 column 3">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 3 column 1">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 3 column 2">
+        <input type="number" min="0" step="1" value="0" aria-label="Recipe row 3 column 3">
+      </div>
+    </div>
+    <div id="shapeless-recipe" class="hidden">
+      <label for="recipe-ingredients">Shapeless ingredients (ID:count, comma-separated)
+        <input id="recipe-ingredients" type="text" placeholder="100:2, 3:1">
+      </label>
+    </div>
+    <div id="smelting-recipe" class="hidden">
+      <div class="field-grid">
+        <label for="smelt-input">Furnace input item ID<input id="smelt-input" type="number" min="1" step="1" value="108"></label>
+        <label for="smelt-seconds">Smelting time (seconds)<input id="smelt-seconds" type="number" min="0.1" max="3600" step="0.1" value="8"></label>
+      </div>
+    </div>
+    <h3>Unique mechanics</h3>
+    <label for="mechanics">Describe behavior
+      <textarea id="mechanics" spellcheck="false" placeholder="Describe this item's unique behavior."></textarea>
+    </label>
+    <h3>JavaScript feature module</h3>
+    <label for="feature-script">Module object (optional)
+      <textarea id="feature-script" spellcheck="false" placeholder="{&#10;  onUse(api, event) {&#10;    api.effects.playSound('pickup');&#10;  },&#10;  onHit(api, event) {&#10;    return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };&#10;  }&#10;}"></textarea>
+    </label>
+    <p class="hint">Define optional onUse, onHit, onBlockBreak, onBlockPlace, and onTick functions. Scripts are shared with the definition, but each player must explicitly enable them in-game. Hooks run in a restricted worker and can only use the game API (inventory, world, player, combat, and effects).</p>
+    <section class="mesh-box" aria-label="Definition pack">
+      <h3 style="margin-top:0">Multi-item pack <span id="pack-count" class="muted">0 items</span></h3>
+      <p class="hint">Add the current definition to the pack, then draw and configure the next item. IDs and texture tiles are assigned automatically after each addition.</p>
+      <div id="pack-items" class="muted">No items in the pack.</div>
+      <div class="actions">
+        <button type="button" id="pack-add">Add current item to pack</button>
+        <button type="button" id="pack-remove">Remove last</button>
+        <button type="button" id="pack-clear">Clear pack</button>
+          <button type="button" id="download-pack" class="primary">Export multi-item pack JSON</button>
+      </div>
+    </section>
+    <div class="actions">
+      <button type="button" id="export" class="primary">Export standalone HTML</button>
+      <button type="button" id="download-json">Export import bundle JSON</button>
+      <button type="button" id="download-js">Export game integration JavaScript</button>
+      <button type="button" id="import-json">Import definition JSON</button>
+      <input id="import-file" type="file" accept=".json,application/json" class="hidden">
+    </div>
+    <h3>Definition preview</h3>
+    <pre id="definition-preview" aria-live="polite"></pre>
+    <div id="message" class="muted" aria-live="polite"></div>
+  </section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const canvas = $('sprite');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  const preview = $('preview');
+  const previewCtx = preview.getContext('2d', { alpha: true });
+  const paletteColors = ['#ffffff','#000000','#777777','#b8c4cc','#7dbb62','#3d7a45','#b77943','#70452d','#e3c36b','#f0a13b','#d95645','#9e3655','#8e6bd1','#4e6fc2','#58b7c6','#f2d7b5'];
+  let size = 16;
+  let pixels = Array(size * size).fill(null);
+  let drawing = false;
+  let activeTool = 'pen';
+  let selectedColor = $('color').value;
+  let history = [];
+  let mesh = null;
+  let meshUrl = null;
+  let modelViewerReady = null;
+  let lastKind = $('kind').value;
+  const packDefinitions = [];
+  const MAX_MESH_BYTES = 20 * 1024 * 1024;
+
+  function pushHistory() {
+    history.push({ size, pixels: pixels.slice() });
+    if (history.length > 50) history.shift();
+  }
+  function drawCanvas(target, targetCtx, px = pixels, grid = false) {
+    const n = Math.sqrt(px.length);
+    targetCtx.clearRect(0, 0, target.width, target.height);
+    const cell = target.width / n;
+    for (let i = 0; i < px.length; i++) {
+      if (!px[i]) continue;
+      const x = (i % n) * cell, y = Math.floor(i / n) * cell;
+      targetCtx.fillStyle = px[i];
+      targetCtx.fillRect(x, y, cell, cell);
+    }
+    if (grid && n <= 32) {
+      targetCtx.beginPath();
+      targetCtx.strokeStyle = 'rgba(210,225,235,.2)';
+      targetCtx.lineWidth = 1;
+      for (let i = 1; i < n; i++) {
+        const p = Math.round(i * cell) + .5;
+        targetCtx.moveTo(p, 0); targetCtx.lineTo(p, target.height);
+        targetCtx.moveTo(0, p); targetCtx.lineTo(target.width, p);
+      }
+      targetCtx.stroke();
+    }
+  }
+  function render() {
+    drawCanvas(canvas, ctx, pixels, true);
+    drawCanvas(preview, previewCtx);
+    updateDefinitionPreview();
+  }
+  function pixelAt(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.min(size - 1, Math.floor((event.clientX - rect.left) / rect.width * size));
+    const y = Math.min(size - 1, Math.floor((event.clientY - rect.top) / rect.height * size));
+    return y * size + x;
+  }
+  function paint(event) {
+    const i = pixelAt(event);
+    const value = activeTool === 'eraser' ? null : selectedColor;
+    if (pixels[i] === value) return;
+    pixels[i] = value;
+    render();
+  }
+  canvas.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    pushHistory();
+    drawing = true;
+    canvas.setPointerCapture(event.pointerId);
+    paint(event);
+  });
+  $('download-js').addEventListener('click', () => {
+    try {
+      const def = makeDefinition();
+      const featureExport = def.features
+        ? '\n\nconst customFeatures = ' + def.features.source + ';\n'
+        : '';
+      downloadBlob(new Blob([def.gameIntegration + featureExport + '\n'], { type: 'text/javascript;charset=utf-8' }), fileBaseName(def.name) + '-integration.js');
+      $('message').textContent = 'Game integration JavaScript exported.';
+    } catch (error) {
+      $('message').textContent = 'Export failed: ' + error.message;
+    }
+  });
+  canvas.addEventListener('pointermove', event => { if (drawing) paint(event); });
+  canvas.addEventListener('pointerup', () => { drawing = false; });
+  canvas.addEventListener('pointercancel', () => { drawing = false; });
+  document.querySelectorAll('[data-tool]').forEach(button => {
+    button.addEventListener('click', () => {
+      activeTool = button.dataset.tool;
+      document.querySelectorAll('[data-tool]').forEach(el => el.classList.toggle('active', el === button));
+    });
+  });
+  $('undo').addEventListener('click', () => {
+    const previous = history.pop();
+    if (previous) {
+      size = previous.size;
+      $('size').value = String(size);
+      canvas.width = canvas.height = size * 32;
+      pixels = previous.pixels;
+      render();
+    }
+  });
+  $('clear').addEventListener('click', () => {
+    if (!pixels.some(Boolean)) return;
+    pushHistory(); pixels = Array(size * size).fill(null); render();
+  });
+  $('size').addEventListener('change', event => {
+    const newSize = Number(event.target.value);
+    const oldCanvas = document.createElement('canvas');
+    oldCanvas.width = oldCanvas.height = size;
+    const oldCtx = oldCanvas.getContext('2d');
+    for (let i = 0; i < pixels.length; i++) {
+      if (!pixels[i]) continue;
+      oldCtx.fillStyle = pixels[i];
+      oldCtx.fillRect(i % size, Math.floor(i / size), 1, 1);
+    }
+    const resized = document.createElement('canvas');
+    resized.width = resized.height = newSize;
+    const resizedCtx = resized.getContext('2d', { willReadFrequently: true });
+    resizedCtx.imageSmoothingEnabled = false;
+    resizedCtx.drawImage(oldCanvas, 0, 0, newSize, newSize);
+    const image = resizedCtx.getImageData(0, 0, newSize, newSize);
+    pushHistory();
+    size = newSize;
+    pixels = Array(size * size).fill(null);
+    for (let i = 0; i < pixels.length; i++) {
+      const o = i * 4;
+      if (image.data[o + 3]) {
+        pixels[i] = '#' + [image.data[o], image.data[o + 1], image.data[o + 2]]
+          .map(v => v.toString(16).padStart(2, '0')).join('');
+      }
+    }
+    canvas.width = canvas.height = size * 32;
+    render();
+  });
+  paletteColors.forEach(color => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'swatch' + (color === selectedColor ? ' selected' : '');
+    swatch.style.background = color;
+    swatch.setAttribute('aria-label', 'Choose ' + color);
+    swatch.addEventListener('click', () => {
+      selectedColor = color; $('color').value = color;
+      document.querySelectorAll('.swatch').forEach(el => el.classList.toggle('selected', el === swatch));
+      activeTool = 'pen';
+      document.querySelector('[data-tool="pen"]').classList.add('active');
+      document.querySelector('[data-tool="eraser"]').classList.remove('active');
+    });
+    $('palette').appendChild(swatch);
+  });
+  $('color').addEventListener('input', event => {
+    selectedColor = event.target.value;
+    document.querySelectorAll('.swatch').forEach(el => el.classList.remove('selected'));
+  });
+  $('kind').addEventListener('change', () => {
+    const isTool = $('kind').value === 'tool';
+    if ($('name').value === (lastKind === 'tool' ? 'New Tool' : 'New Block')) {
+      $('name').value = isTool ? 'New Tool' : 'New Block';
+    }
+    lastKind = $('kind').value;
+    $('tool-fields').classList.toggle('hidden', !isTool);
+    $('block-fields').classList.toggle('hidden', isTool);
+    $('registry-id').value = String(nextFreeId($('kind').value));
+    $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+    $('category').value = isTool ? 'tools' : 'building';
+    $('atlas-index').value = String(nextFreeTile());
+    updateDefinitionPreview();
+  });
+  $('name').addEventListener('input', () => {
+    if (!$('registry-key').dataset.edited) {
+      $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+    }
+  });
+  $('registry-key').addEventListener('input', () => { $('registry-key').dataset.edited = 'true'; });
+  $('recipe-type').addEventListener('change', updateRecipeFields);
+  $('recipe-grid-size').addEventListener('change', () => {
+    if ($('recipe-type').value !== 'smelting') {
+      $('recipe-station').value = $('recipe-grid-size').value === '2' ? 'inventory' : 'crafting_table';
+    }
+    updateRecipeFields();
+  });
+  $('recipe-station').addEventListener('change', () => {
+    if ($('recipe-station').value === 'inventory') $('recipe-grid-size').value = '2';
+    if ($('recipe-station').value === 'crafting_table') $('recipe-grid-size').value = '3';
+    updateRecipeFields();
+  });
+  function updateRecipeFields() {
+    const type = $('recipe-type').value;
+    $('shaped-recipe').classList.toggle('hidden', type !== 'shaped');
+    $('shapeless-recipe').classList.toggle('hidden', type !== 'shapeless');
+    $('smelting-recipe').classList.toggle('hidden', type !== 'smelting');
+    const gridSize = Number($('recipe-grid-size').value);
+    if (type === 'smelting') $('recipe-station').value = 'furnace';
+    else $('recipe-station').value = gridSize === 2 ? 'inventory' : 'crafting_table';
+    Array.from($('recipe-pattern').children).forEach((input, i) => {
+      input.classList.toggle('hidden', Math.floor(i / 3) >= gridSize || i % 3 >= gridSize);
+    });
+    updateDefinitionPreview();
+  }
+  function cleanNumber(id, min, max, integer = false) {
+    const el = $(id);
+    let value = Number(el.value);
+    if (!Number.isFinite(value)) value = min;
+    value = Math.max(min, Math.min(max, value));
+    if (integer) value = Math.round(value);
+    el.value = String(value);
+    return value;
+  }
+  function numericId(value, label, allowZero = false) {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id < (allowZero ? 0 : 1) || id > 65535) {
+      throw new Error(label + ' must be an integer ID' + (allowZero ? ' greater than or equal to 0.' : ' greater than 0.'));
+    }
+    return id;
+  }
+  function makeRecipe(id) {
+    const type = $('recipe-type').value;
+    if (type === 'none') return null;
+    const result = { id, count: cleanNumber('recipe-result-count', 1, 64, true) };
+    if (type === 'shaped') {
+      const gridSize = Number($('recipe-grid-size').value);
+      const cells = Array.from($('recipe-pattern').children, input => numericId(input.value || '0', 'Recipe ingredient', true));
+      const pattern = Array.from({ length: gridSize }, (_, y) => cells.slice(y * 3, y * 3 + gridSize));
+      if (pattern.every(row => row.every(cell => cell === 0))) throw new Error('Add at least one shaped recipe ingredient.');
+      return { type, station: $('recipe-station').value, gridSize, pattern, result };
+    }
+    if (type === 'shapeless') {
+      const ingredients = {};
+      const entries = $('recipe-ingredients').value.split(',').map(s => s.trim()).filter(Boolean);
+      if (!entries.length) throw new Error('Add at least one shapeless recipe ingredient.');
+      for (const entry of entries) {
+        const match = /^(\d+)\s*:\s*(\d+)$/.exec(entry);
+        if (!match) throw new Error('Shapeless ingredients must use ID:count entries separated by commas.');
+        const ingredientId = numericId(match[1], 'Shapeless ingredient');
+        const count = Number(match[2]);
+        if (!Number.isInteger(count) || count < 1 || count > 64) throw new Error('Ingredient counts must be whole numbers from 1 to 64.');
+        ingredients[ingredientId] = (ingredients[ingredientId] || 0) + count;
+      }
+      const gridSize = Number($('recipe-grid-size').value);
+      const ingredientTotal = Object.values(ingredients).reduce((total, count) => total + count, 0);
+      if (ingredientTotal > gridSize * gridSize) throw new Error('Ingredient count exceeds the selected crafting grid capacity.');
+      return { type, station: $('recipe-station').value, ingredients, result };
+    }
+    const inputId = numericId($('smelt-input').value, 'Furnace input');
+    return {
+      type: 'smelting',
+      station: 'furnace',
+      input: { id: inputId, count: 1 },
+      smeltingSeconds: cleanNumber('smelt-seconds', 0.1, 3600),
+      result,
+    };
+  }
+  function makeGameIntegration(definition) {
+    const id = definition.registry.id;
+    const tile = definition.texture.atlasIndex;
+    const pixels16 = Array.from({ length: 256 }, (_, i) => {
+      const x = Math.floor(i % 16 * definition.sprite.width / 16);
+      const y = Math.floor(i / 16 * definition.sprite.height / 16);
+      const color = definition.sprite.pixels[y * definition.sprite.width + x];
+      if (!color) return null;
+      const hex = color.slice(1);
+      return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16), 1];
+    });
+    const tileFunction = 'TILE_FNS[' + tile + '] = (x, y) => { const c = ' + JSON.stringify(pixels16) +
+      '[y * 16 + x]; return c || [0, 0, 0, 0]; };';
+    const registryEntry = definition.kind === 'tool'
+      ? 'BLOCK_TYPES[' + id + '] = ' + JSON.stringify({
+          name: definition.name, isItem: true, isTool: true, tool: definition.base.toolType,
+          speed: definition.base.miningSpeedMultiplier, maxStack: definition.base.maxStack,
+          damage: definition.base.damage, attackCooldown: definition.base.cooldownSeconds,
+          reach: definition.base.reachBlocks, harvestLevel: definition.base.harvestLevel,
+          knockbackMultiplier: definition.base.knockbackMultiplier,
+        }, null, 2) + ';'
+      : 'BLOCK_TYPES[' + id + '] = ' + JSON.stringify({
+          name: definition.name, maxStack: definition.base.maxStack, solid: definition.base.solid,
+          transparent: definition.base.transparent, light: definition.base.light,
+          dropItemId: definition.base.dropItemId, dropCount: definition.base.dropCount,
+          effectiveTool: definition.base.effectiveTool, toolSpeed: definition.base.toolSpeed,
+        }, null, 2) + ';\nBLOCK_HARDNESS[' + id + '] = ' + (definition.base.unbreakable ? 'Infinity' : definition.base.hardnessSeconds) + ';';
+    const lines = [
+      '// Insert after TILE_FNS, BLOCK_TYPES, BLOCK_TILES, BLOCK_HARDNESS, DURABILITY, RECIPES, and SMELT_RECIPES are defined.',
+      tileFunction,
+      registryEntry,
+      'BLOCK_TILES[' + id + '] = { all: ' + tile + ', isItem: ' + (definition.kind === 'tool') + ' };',
+    ];
+    if (definition.kind === 'tool') lines.push('DURABILITY[' + id + '] = ' + definition.base.durabilityUses + ';');
+    if (definition.recipe) {
+      if (definition.recipe.type === 'smelting') {
+        lines.push('SMELT_RECIPES[' + definition.recipe.input.id + '] = ' + JSON.stringify(definition.recipe.result) + ';');
+        lines.push('// Smelting duration is metadata; wire smeltingSeconds into the furnace timer if per-recipe times are desired.');
+      } else {
+        const recipe = { ...definition.recipe };
+        delete recipe.station;
+        delete recipe.gridSize;
+        lines.push('RECIPES.push(' + JSON.stringify(recipe) + ');');
+        lines.push('// The game recipe matcher does not enforce station metadata; pattern dimensions determine whether it fits the available grid.');
+      }
+    }
+    if (definition.kind === 'block' && definition.base.dropItemId !== 'self') {
+      lines.push('// getOreDrop(id) currently returns the block ID by default; add a case returning ' + definition.base.dropItemId + ' for ID ' + id + '.');
+    }
+    if (definition.kind === 'tool') {
+      lines.push('// Combat damage, cooldown, reach, durability, mining speed, and knockback are consumed by the custom-item runtime.');
+      if (definition.base.toolType !== 'pickaxe') {
+        lines.push('// Current getBreakTime() only applies tool speed to pickaxes; add the other tool types to its matching rule to use this speed.');
+      }
+    }
+    if (definition.features && definition.features.source) {
+      lines.push('// Store this definition.features object in customDefinitionsById and invoke its hooks through the restricted custom-feature runtime.');
+    }
+    return lines.join('\n');
+  }
+  function makeDefinition() {
+    const kind = $('kind').value;
+    const mechanics = $('mechanics').value;
+    const id = numericId($('registry-id').value, 'Registry ID');
+    const atlasIndex = numericId($('atlas-index').value, 'Atlas tile', true);
+    if (atlasIndex < 54 || atlasIndex > 127) throw new Error('Choose an unused custom atlas tile from 54 to 127.');
+    if (packDefinitions.some(definition => definition.registry.id === id)) throw new Error('This registry ID is already in the pack.');
+    if (packDefinitions.some(definition => definition.texture.atlasIndex === atlasIndex)) throw new Error('This atlas tile is already in the pack.');
+    if (kind === 'tool' && id < 120) throw new Error('Tool/item IDs must be 120 or higher to avoid existing game item IDs.');
+    if (kind === 'block' && id < 30) throw new Error('Block IDs must be 30 or higher to avoid existing game block IDs.');
+    if (kind === 'block' && (id === 99 || (id >= 100 && id <= 119))) throw new Error('Block IDs 99 and 100–119 are already reserved by the game.');
+    const key = $('registry-key').value.trim() || fileBaseName($('name').value).replace(/-/g, '_');
+    if (!/^[a-z][a-z0-9_]*$/.test(key)) throw new Error('Internal key must start with a lowercase letter and contain only lowercase letters, numbers, and underscores.');
+    const recipe = makeRecipe(id);
+    const common = {
+      schema: 'coop1.10.item-block-definition.v2',
+      name: $('name').value.trim() || 'Unnamed item',
+      kind,
+      registry: {
+        id,
+        key,
+        category: $('category').value.trim() || 'misc',
+      },
+      texture: { atlasIndex, faces: { top: 'sprite', side: 'sprite', bottom: 'sprite' } },
+      sprite: {
+        width: size,
+        height: size,
+        pixels: pixels.slice(),
+        pngDataUrl: canvas.toDataURL('image/png'),
+      },
+      mechanics: {
+        unique: mechanics,
+        hookContract: 'Optional executable features are stored in features.source and run through the game custom-feature API after the player enables them.',
+      },
+      recipe,
+    };
+    if (kind === 'tool') {
+      common.base = {
+        damage: cleanNumber('damage', 0, 1000),
+        cooldownSeconds: cleanNumber('cooldown', 0, 60),
+        knockbackMultiplier: cleanNumber('knockback', 0, 3),
+        reachBlocks: cleanNumber('reach', 0, 32),
+        durabilityUses: cleanNumber('durability', 1, 1000000, true),
+        miningSpeedMultiplier: cleanNumber('mining-speed', 0, 100),
+        toolType: $('tool-type').value,
+        harvestLevel: cleanNumber('harvest-level', 0, 255, true),
+        maxStack: cleanNumber('max-stack', 1, 64, true),
+      };
+      const testHardness = cleanNumber('test-hardness', 0, 1000000);
+      common.miningEstimate = {
+        exampleHardnessSeconds: testHardness,
+        usingThisToolSeconds: testHardness <= 0 ? 0.001 :
+          (common.base.toolType === 'none' ? testHardness :
+            (common.base.miningSpeedMultiplier > 0 ? testHardness / common.base.miningSpeedMultiplier : null)),
+      };
+    } else {
+      common.base = {
+        hardnessSeconds: $('unbreakable').value === 'true' ? null : cleanNumber('hardness', 0, 1000000),
+        unbreakable: $('unbreakable').value === 'true',
+        effectiveTool: $('effective-tool').value,
+        toolSpeed: cleanNumber('block-tool-speed', 0, 100),
+        estimateUsesEffectiveTool: $('block-test-tool').value === 'true',
+        maxStack: cleanNumber('block-stack', 1, 64, true),
+        dropItemId: $('drop-item').value.trim() === 'self' ? 'self' : numericId($('drop-item').value, 'Drop item'),
+        dropCount: cleanNumber('drop-count', 0, 64, true),
+        solid: $('solid').value === 'true',
+        transparent: $('transparent').value === 'true',
+        light: cleanNumber('light', 0, 15, true),
+      };
+      common.miningEstimate = {
+        withEffectiveToolSeconds: common.base.unbreakable ? null :
+          (common.base.hardnessSeconds <= 0 ? 0.001 :
+            (common.base.estimateUsesEffectiveTool && common.base.effectiveTool !== 'none'
+              ? (common.base.toolSpeed > 0 ? common.base.hardnessSeconds / common.base.toolSpeed : null)
+              : common.base.hardnessSeconds)),
+        withoutEffectiveToolSeconds: common.base.unbreakable ? null :
+          (common.base.hardnessSeconds <= 0 ? 0.001 : common.base.hardnessSeconds),
+      };
+    }
+    const featureSource = $('feature-script').value.trim();
+    if (featureSource) {
+      if (featureSource.length > 65536) throw new Error('JavaScript feature modules must be 64 KB or smaller.');
+      common.features = {
+        runtime: 'coop1.10.javascript-feature.v1',
+        events: ['onUse', 'onHit', 'onBlockBreak', 'onBlockPlace', 'onTick'],
+        capabilities: ['combat', 'inventory', 'world', 'player', 'effects'],
+        source: featureSource,
+      };
+    }
+    if (mesh) {
+      common.mesh = { fileName: mesh.name, mimeType: 'model/gltf-binary', byteLength: mesh.bytes.byteLength, base64: mesh.base64 };
+    }
+    common.gameIntegration = makeGameIntegration(common);
+    $('tool-time-preview').textContent = kind === 'tool' && common.miningEstimate
+      ? 'Estimated time for this tool: ' + (common.miningEstimate.usingThisToolSeconds === null ? 'not defined (speed is 0)' : common.miningEstimate.usingThisToolSeconds.toFixed(2) + ' seconds') + ' against the example hardness.'
+      : '';
+    $('block-time-preview').textContent = kind === 'block' && common.miningEstimate
+      ? (common.base.unbreakable ? 'Unbreakable: mining time is infinite.' :
+        'Estimated mining time: ' + common.miningEstimate.withEffectiveToolSeconds.toFixed(2) + ' seconds with the selected effective-tool setting; ' +
+        common.miningEstimate.withoutEffectiveToolSeconds.toFixed(2) + ' seconds without it.')
+      : '';
+    return common;
+  }
+  function updateDefinitionPreview() {
+    if (!$('definition-preview')) return;
+    try {
+      $('definition-preview').textContent = JSON.stringify(makeDefinition(), null, 2);
+      $('message').textContent = '';
+    } catch (error) {
+      $('definition-preview').textContent = 'Definition error: ' + error.message;
+      $('message').textContent = error.message;
+    }
+  }
+  document.querySelectorAll('input, select, textarea').forEach(el => {
+    if (el.id !== 'mesh-file' && el.id !== 'color' && el.id !== 'size') {
+      el.addEventListener('input', updateDefinitionPreview);
+      el.addEventListener('change', updateDefinitionPreview);
+    }
+  });
+  function loadModelViewer() {
+    if (customElements.get('model-viewer')) return Promise.resolve();
+    if (modelViewerReady) return modelViewerReady;
+    modelViewerReady = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = 'https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js';
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('Could not load mesh preview library; mesh will still be embedded in the export.'));
+      document.head.appendChild(script);
+    });
+    return modelViewerReady;
+  }
+  $('mesh-file').addEventListener('change', async event => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    if (file.size > MAX_MESH_BYTES) { $('message').textContent = 'Mesh is too large. Choose a GLB under 20 MB.'; return; }
+    try {
+      const buffer = await file.arrayBuffer();
+      const view = new DataView(buffer);
+      if (buffer.byteLength < 12 || view.getUint32(0, true) !== 0x46546c67 || view.getUint32(4, true) !== 2) {
+        throw new Error('Choose a valid binary glTF 2.0 (.glb) file.');
+      }
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(',')[1]);
+        reader.onerror = () => reject(reader.error || new Error('Could not read mesh file'));
+        reader.readAsDataURL(file);
+      });
+      if (meshUrl) URL.revokeObjectURL(meshUrl);
+      mesh = { name: file.name, bytes: buffer, base64 };
+      meshUrl = URL.createObjectURL(new Blob([buffer], { type: 'model/gltf-binary' }));
+      $('mesh-info').textContent = file.name + ' · ' + (file.size / 1024 / 1024).toFixed(2) + ' MB · embedded in HTML export';
+      $('remove-mesh').classList.remove('hidden');
+      $('message').textContent = 'Mesh imported.';
+      updateDefinitionPreview();
+      try {
+        await loadModelViewer();
+        $('mesh-view').src = meshUrl;
+        $('mesh-view').classList.remove('hidden');
+      } catch (previewError) {
+        $('message').textContent = previewError.message;
+      }
+    } catch (error) {
+      $('message').textContent = error.message;
+    }
+  });
+  $('remove-mesh').addEventListener('click', () => {
+    mesh = null;
+    if (meshUrl) URL.revokeObjectURL(meshUrl);
+    meshUrl = null;
+    $('mesh-view').removeAttribute('src');
+    $('mesh-view').classList.add('hidden');
+    $('mesh-info').textContent = 'No mesh imported.';
+    $('remove-mesh').classList.add('hidden');
+    updateDefinitionPreview();
+  });
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  }
+  function makeExportHtml(definition) {
+    const safeJson = JSON.stringify(definition).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026');
+    const title = escapeHtml(definition.name);
+    const modelScript = definition.mesh
+      ? '<scr' + 'ipt type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></scr' + 'ipt>'
+      : '';
+    return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+      '<title>' + title + ' — Co-op item definition</title><style>' +
+      'body{margin:0;padding:24px;background:#11151a;color:#eef2f5;font:14px system-ui,Segoe UI,sans-serif}' +
+      'main{max-width:900px;margin:auto;display:grid;grid-template-columns:240px 1fr;gap:20px}section{background:#1a2229;border:1px solid #34414b;border-radius:10px;padding:18px}h1{font-size:22px;margin:0 0 8px}h2{font-size:14px;color:#b8d6c1;text-transform:uppercase;letter-spacing:.1em}img{width:192px;height:192px;image-rendering:pixelated;background-color:#263039;background-image:linear-gradient(45deg,#354049 25%,transparent 25%),linear-gradient(-45deg,#354049 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#354049 75%),linear-gradient(-45deg,transparent 75%,#354049 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#10161b;padding:12px;border-radius:6px;font:12px/1.5 Consolas,monospace}button{background:#376c49;color:white;padding:9px 12px;border:0;border-radius:5px;cursor:pointer}model-viewer{width:100%;height:300px;background:#10161b;border-radius:6px}.muted{color:#aebbc4;font-size:12px;line-height:1.5}@media(max-width:650px){main{grid-template-columns:1fr}}</style>' +
+      modelScript + '</head><body><main><section><h1>' + title + '</h1><div id="sprite"></div><p class="muted" id="summary"></p><div id="mesh"></div><button id="download-mesh" hidden>Download embedded GLB</button></section><section><h2>Base mechanics</h2><pre id="base"></pre><h2>Unique mechanics</h2><pre id="mechanics"></pre><h2>Game integration snippet</h2><pre id="integration"></pre><p class="muted">This snippet targets coop1.10.js registry conventions. The game does not load definition files dynamically; follow any hook notes in the snippet and add the code at the indicated registries.</p><h2>Definition data</h2><pre id="data"></pre></section></main>' +
+      '<scr' + 'ipt type="application/json" id="definition-data">' + safeJson + '</scr' + 'ipt><scr' + 'ipt>' +
+      'const d=JSON.parse(document.getElementById("definition-data").textContent);' +
+      'document.getElementById("sprite").replaceChildren(Object.assign(document.createElement("img"),{alt:d.name+" sprite",src:d.sprite.pngDataUrl}));' +
+      'document.getElementById("summary").textContent=d.kind==="tool"?"Tool / weapon definition":"Placeable block definition";' +
+      'document.getElementById("base").textContent=JSON.stringify(d.base,null,2);' +
+      'document.getElementById("mechanics").textContent=d.mechanics.unique||"No unique mechanics specified."; ' +
+      'document.getElementById("integration").textContent=d.gameIntegration;' +
+      'document.getElementById("data").textContent=JSON.stringify({...d,mesh:d.mesh?{fileName:d.mesh.fileName,mimeType:d.mesh.mimeType,byteLength:d.mesh.byteLength,base64:"(embedded; use Download embedded GLB)"}:undefined},null,2);' +
+      (definition.mesh
+        ? 'const raw=atob(d.mesh.base64),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);const blob=new Blob([bytes],{type:"model/gltf-binary"});const url=URL.createObjectURL(blob);const mv=document.createElement("model-viewer");mv.setAttribute("src",url);mv.setAttribute("camera-controls","");mv.setAttribute("auto-rotate","");document.getElementById("mesh").appendChild(mv);const b=document.getElementById("download-mesh");b.hidden=false;b.onclick=()=>{const a=document.createElement("a");a.href=url;a.download=d.mesh.fileName;a.click()};'
+        : 'document.getElementById("mesh").remove();') +
+      '</scr' + 'ipt></body></html>';
+  }
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = filename;
+    document.body.appendChild(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function fileBaseName(name) {
+    return name.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'coop-item';
+  }
+  function nextFreeId(kind) {
+    const used = new Set(packDefinitions.map(definition => definition.registry.id));
+    const min = kind === 'tool' ? 120 : 30;
+    const max = kind === 'tool' ? 65535 : 255;
+    for (let id = min; id <= max; id++) {
+      if (kind === 'block' && (id === 99 || (id >= 100 && id <= 119))) continue;
+      if (!used.has(id)) return id;
+    }
+    throw new Error('No free registry IDs remain for this item type.');
+  }
+  function nextFreeTile() {
+    const used = new Set(packDefinitions.map(definition => definition.texture.atlasIndex));
+    for (let tile = 54; tile <= 127; tile++) if (!used.has(tile)) return tile;
+    throw new Error('The pack has used all available custom texture tiles (54–127).');
+  }
+  function renderPack() {
+    $('pack-count').textContent = packDefinitions.length + (packDefinitions.length === 1 ? ' item' : ' items');
+    $('pack-items').textContent = packDefinitions.length
+      ? packDefinitions.map(definition => definition.name + ' (ID ' + definition.registry.id +
+        ', tile ' + definition.texture.atlasIndex + ')').join(' · ')
+      : 'No items in the pack.';
+  }
+  function clearForNextPackItem() {
+    pushHistory();
+    pixels = Array(size * size).fill(null);
+    $('name').value = $('kind').value === 'tool' ? 'New Tool' : 'New Block';
+    $('registry-id').value = String(nextFreeId($('kind').value));
+    $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+    $('registry-key').dataset.edited = '';
+    $('atlas-index').value = String(nextFreeTile());
+    $('mechanics').value = '';
+    $('feature-script').value = '';
+    $('recipe-type').value = 'none';
+    $('recipe-ingredients').value = '';
+    $('shaped-recipe').classList.add('hidden');
+    $('shapeless-recipe').classList.add('hidden');
+    $('smelting-recipe').classList.add('hidden');
+    Array.from($('recipe-pattern').children).forEach(input => { input.value = '0'; });
+    if (meshUrl) URL.revokeObjectURL(meshUrl);
+    mesh = null;
+    meshUrl = null;
+    $('mesh-view').removeAttribute('src');
+    $('mesh-view').classList.add('hidden');
+    $('mesh-info').textContent = 'No mesh imported.';
+    $('remove-mesh').classList.add('hidden');
+    canvas.width = canvas.height = size * 32;
+    render();
+    updateDefinitionPreview();
+  }
+  $('pack-add').addEventListener('click', () => {
+    try {
+      if (packDefinitions.length >= 74) throw new Error('The pack has used all 74 custom texture tiles (54–127).');
+      const definition = makeDefinition();
+      if (packDefinitions.some(entry => entry.registry.id === definition.registry.id)) throw new Error('This registry ID is already in the pack.');
+      if (packDefinitions.some(entry => entry.texture.atlasIndex === definition.texture.atlasIndex)) throw new Error('This atlas tile is already in the pack.');
+      packDefinitions.push(definition);
+      renderPack();
+      clearForNextPackItem();
+      $('message').textContent = definition.name + ' added to the pack.';
+    } catch (error) {
+      $('message').textContent = 'Could not add item to pack: ' + error.message;
+    }
+  });
+  $('pack-remove').addEventListener('click', () => {
+    if (!packDefinitions.length) return;
+    const removed = packDefinitions.pop();
+    renderPack();
+    $('message').textContent = removed.name + ' removed from the pack.';
+    updateDefinitionPreview();
+  });
+  $('pack-clear').addEventListener('click', () => {
+    packDefinitions.length = 0;
+    renderPack();
+    $('message').textContent = 'Pack cleared.';
+    updateDefinitionPreview();
+  });
+  $('download-pack').addEventListener('click', () => {
+    try {
+      if (!packDefinitions.length) throw new Error('Add at least one definition to the pack first.');
+      const pack = {
+        schema: 'coop1.10.item-block-pack.v1',
+        name: 'Co-op item pack',
+        definitions: packDefinitions,
+      };
+      downloadBlob(new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json;charset=utf-8' }), 'coop-item-pack.json');
+      $('message').textContent = packDefinitions.length + ' definitions exported as a pack.';
+    } catch (error) {
+      $('message').textContent = 'Pack export failed: ' + error.message;
+    }
+  });
+  $('export').addEventListener('click', () => {
+    try {
+      const def = makeDefinition();
+      const html = makeExportHtml(def);
+      downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8' }), fileBaseName(def.name) + '.html');
+      $('message').textContent = 'Standalone HTML exported.';
+    } catch (error) {
+      $('message').textContent = 'Export failed: ' + error.message;
+    }
+  });
+  $('download-json').addEventListener('click', () => {
+    try {
+      const def = makeDefinition();
+      downloadBlob(new Blob([JSON.stringify(def, null, 2)], { type: 'application/json;charset=utf-8' }), fileBaseName(def.name) + '.json');
+      $('message').textContent = 'Import bundle JSON exported, including registry data and game integration code.';
+    } catch (error) {
+      $('message').textContent = 'Export failed: ' + error.message;
+    }
+  });
+  $('import-json').addEventListener('click', () => $('import-file').click());
+  $('import-file').addEventListener('change', async event => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const definition = JSON.parse(await file.text());
+      if (!definition || !['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(definition.schema)) {
+        throw new Error('This is not a supported Co-op item definition JSON file.');
+      }
+      if (!definition.sprite || !Array.isArray(definition.sprite.pixels) ||
+          ![16, 32, 64].includes(definition.sprite.width) ||
+          definition.sprite.height !== definition.sprite.width ||
+          definition.sprite.pixels.length !== definition.sprite.width * definition.sprite.width ||
+          !definition.sprite.pixels.every(pixel => pixel === null || (typeof pixel === 'string' && /^#[0-9a-f]{6}$/i.test(pixel)))) {
+        throw new Error('The definition has invalid sprite pixel data.');
+      }
+      let importedMesh = null;
+      if (definition.mesh && definition.mesh.base64) {
+        const raw = atob(definition.mesh.base64);
+        if (raw.length > MAX_MESH_BYTES || raw.length < 12) throw new Error('The embedded mesh has an invalid size.');
+        const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+        const header = new DataView(bytes.buffer);
+        if (header.getUint32(0, true) !== 0x46546c67 || header.getUint32(4, true) !== 2) {
+          throw new Error('The embedded mesh is not a valid binary glTF 2.0 file.');
+        }
+        importedMesh = { bytes, base64: definition.mesh.base64, name: definition.mesh.fileName || 'imported.glb' };
+      }
+      pushHistory();
+      size = definition.sprite.width;
+      $('size').value = String(size);
+      canvas.width = canvas.height = size * 32;
+      pixels = definition.sprite.pixels.slice();
+      $('name').value = definition.name || 'Imported item';
+      $('kind').value = definition.kind === 'block' ? 'block' : 'tool';
+      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
+      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
+      $('registry-key').dataset.edited = 'true';
+      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
+      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
+      $('mechanics').value = definition.mechanics && definition.mechanics.unique || '';
+      if (definition.kind === 'tool') {
+        const b = definition.base || {};
+        $('damage').value = String(b.damage ?? 4);
+        $('cooldown').value = String(b.cooldownSeconds ?? 0.55);
+        $('knockback').value = String(b.knockbackMultiplier ?? 1);
+        $('reach').value = String(b.reachBlocks ?? 4);
+        $('durability').value = String(b.durabilityUses ?? 100);
+        $('mining-speed').value = String(b.miningSpeedMultiplier ?? 1);
+        $('tool-type').value = ['pickaxe','axe','shovel','hoe','sword','none'].includes(b.toolType) ? b.toolType : 'pickaxe';
+        $('harvest-level').value = String(b.harvestLevel ?? 0);
+        $('max-stack').value = String(b.maxStack ?? 1);
+        $('test-hardness').value = String(definition.miningEstimate && definition.miningEstimate.exampleHardnessSeconds || 3);
+      } else {
+        const b = definition.base || {};
+        $('hardness').value = String(b.hardnessSeconds ?? b.hardness ?? 1);
+        $('unbreakable').value = String(b.unbreakable === true);
+        $('effective-tool').value = ['none','pickaxe','axe','shovel','hoe','shears'].includes(b.effectiveTool) ? b.effectiveTool : 'none';
+        $('block-tool-speed').value = String(b.toolSpeed ?? 1);
+        $('block-test-tool').value = String(b.estimateUsesEffectiveTool !== false);
+        $('block-stack').value = String(b.maxStack ?? 64);
+        $('drop-item').value = String(b.dropItemId ?? 'self');
+        $('drop-count').value = String(b.dropCount ?? 1);
+        $('solid').value = String(b.solid !== false);
+        $('transparent').value = String(b.transparent === true);
+        $('light').value = String(b.light ?? 0);
+      }
+      const recipe = definition.recipe;
+      $('recipe-type').value = recipe ? recipe.type : 'none';
+      $('recipe-result-count').value = String(recipe && recipe.result ? recipe.result.count : 1);
+      $('recipe-station').value = recipe && recipe.station || 'crafting_table';
+      $('recipe-grid-size').value = String(recipe && recipe.gridSize || 3);
+      $('recipe-ingredients').value = recipe && recipe.ingredients
+        ? Object.entries(recipe.ingredients).map(([ingredientId, count]) => ingredientId + ':' + count).join(', ')
+        : '';
+      $('smelt-input').value = String(recipe && recipe.input ? recipe.input.id : 108);
+      $('smelt-seconds').value = String(recipe && recipe.smeltingSeconds || 8);
+      Array.from($('recipe-pattern').children).forEach((input, i) => {
+        const row = recipe && recipe.pattern && recipe.pattern[Math.floor(i / 3)];
+        input.value = String(row && row[i % 3] || 0);
+      });
+      $('kind').dispatchEvent(new Event('change'));
+      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
+      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
+      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
+      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
+      updateRecipeFields();
+      if (importedMesh) {
+        const bytes = importedMesh.bytes;
+        if (meshUrl) URL.revokeObjectURL(meshUrl);
+        mesh = { name: importedMesh.name, bytes: bytes.buffer, base64: importedMesh.base64 };
+        meshUrl = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }));
+        $('mesh-info').textContent = mesh.name + ' · ' + (bytes.length / 1024 / 1024).toFixed(2) + ' MB · embedded in HTML export';
+        $('remove-mesh').classList.remove('hidden');
+        $('mesh-view').src = meshUrl;
+        $('mesh-view').classList.remove('hidden');
+      } else {
+        mesh = null;
+        if (meshUrl) URL.revokeObjectURL(meshUrl);
+        meshUrl = null;
+        $('mesh-view').removeAttribute('src');
+        $('mesh-view').classList.add('hidden');
+        $('mesh-info').textContent = 'No mesh imported.';
+        $('remove-mesh').classList.add('hidden');
+      }
+      render();
+      $('message').textContent = 'Definition imported into the editor.';
+      $('feature-script').value = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
+        ? definition.features.source || ''
+        : '';
+      renderPack();
+      updateDefinitionPreview();
+    } catch (error) {
+      $('message').textContent = 'Import failed: ' + error.message;
+    }
+  });
+  window.addEventListener('beforeunload', () => { if (meshUrl) URL.revokeObjectURL(meshUrl); });
+  renderPack();
+  render();
+})();
+</script>
+</body>
+</html>
