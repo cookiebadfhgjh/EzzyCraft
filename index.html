@@ -418,7 +418,6 @@
     </div>
     <div class="menu-buttons">
       <button class="mc-btn" id="btn-singleplayer">Singleplayer</button>
-      <button class="mc-btn accent" id="btn-import-definition">Import Item / Block Definition</button>
       <button class="mc-btn accent" id="btn-join-online">Join Online Game</button>
       <button class="mc-btn" id="btn-options">Options...</button>
       <button class="mc-btn" id="btn-quit">Quit Game</button>
@@ -496,6 +495,17 @@
         <div class="opt-value" id="opt-volume-val">70%</div></div>
       <label for="opt-name">PLAYER NAME (shown in co-op)</label>
       <input class="mc-input" id="opt-name" maxlength="16" autocomplete="off">
+      <section class="form" id="server-settings">
+        <label for="server-op-code">SERVER SETTINGS — OPERATOR CODE</label>
+        <input class="mc-input" id="server-op-code" type="password" autocomplete="off"
+               placeholder="Enter the code configured by the server operator">
+        <div style="font-size:10px;opacity:.7">The server operator sets this when starting the server with <code>-op-code</code>.</div>
+        <button class="mc-btn" id="btn-server-settings-unlock">Unlock Server Settings</button>
+        <div id="server-settings-tools" style="display:none">
+          <button class="mc-btn accent" id="btn-import-definition">Import Item / Block Definition</button>
+          <button class="mc-btn" id="btn-server-settings-lock">Lock Server Settings</button>
+        </div>
+      </section>
     </div>
     <div class="menu-buttons">
       <button class="mc-btn" id="btn-options-back">Done</button>
@@ -518,7 +528,6 @@
       </div>
       <button class="mc-btn danger" id="btn-close-room" style="display:none">Close Online Room</button>
       <button class="mc-btn" id="btn-pause-options">Options...</button>
-      <button class="mc-btn" id="btn-pause-import-definition">Import Item / Block Definition</button>
       <button class="mc-btn" id="btn-save-file">Save World to File</button>
       <button class="mc-btn accent" id="btn-save-quit">Save and Quit to Title</button>
     </div>
@@ -588,7 +597,7 @@ const GRASS=1, DIRT=2, STONE=3, SAND=4, LOG=5, LEAVES=6, PLANKS=7,
       FURNACE=20, COAL_ORE=21, LAVA=22,
       MYCELIUM=23, MUSHROOM_STEM=24, MUSHROOM_CAP_RED=25, MUSHROOM_CAP_BROWN=26,
       SMALL_MUSHROOM_RED=27, SMALL_MUSHROOM_BROWN=28,
-      GRASS_PLANT=29;
+      GRASS_PLANT=29, GRAVEL=99;
 
 /* Items */
 const STICK=100, WOOD_PICKAXE=101, STONE_PICKAXE=102, IRON_PICKAXE=103,
@@ -602,7 +611,7 @@ const BLOCK_HARDNESS = {
   1: 0.7, 2: 0.7, 3: 3.0, 4: 0.6, 5: 2.0, 6: 0.45, 7: 1.5, 8: 2.5, 9: Infinity,
   10: 0.9, 11: 3.0, 12: 1.5, 13: 2.0, 14: Infinity,
   15: 4.0, 16: 4.0, 17: 5.0, 18: 5.0, 19: 4.5,
-  20: 3.5, 21: 3.0, 22: Infinity,
+  20: 3.5, 21: 3.0, 22: Infinity, 99: 0.6,
   23: 0.7, 24: 0.6, 25: 0.5, 26: 0.5, 27: 0.0, 28: 0.0, 29: 0.0,
 };
 const DURABILITY = {
@@ -1115,7 +1124,7 @@ const gltfLoader = new GLTFLoader();
 
 const BLOCK_TILES = {
   1: { top: 0, side: 1, bottom: 2 },
-  2: { all: 2 }, 3: { all: 3 }, 4: { all: 4 },
+  2: { all: 2 }, 3: { all: 3 }, 4: { all: 4 }, 99: { all: 3 },
   5: { top: 5, side: 6, bottom: 5 },
   6: { all: 7 }, 7: { all: 8 }, 8: { all: 9 }, 9: { all: 10 },
   10: { all: 11 }, 11: { all: 12 },
@@ -1166,7 +1175,7 @@ const BLOCK_TYPES = {
   23: { name: 'Mycelium' }, 24: { name: 'Mushroom Stem' },
   25: { name: 'Red Mushroom Cap' }, 26: { name: 'Brown Mushroom Cap' },
   27: { name: 'Red Mushroom', plant: true }, 28: { name: 'Brown Mushroom', plant: true },
-  29: { name: 'Tall Grass', plant: true },
+  29: { name: 'Tall Grass', plant: true }, 99: { name: 'Gravel' },
   100: { name: 'Stick', isItem: true },
   101: { name: 'Wood Pickaxe', isItem: true, isTool: true, tool: 'pickaxe', speed: 2, maxStack: 1 },
   102: { name: 'Stone Pickaxe', isItem: true, isTool: true, tool: 'pickaxe', speed: 3, maxStack: 1 },
@@ -1477,6 +1486,7 @@ function placeOresInChunk(data, cx, cz) {
     { id: DIAMOND_ORE, yMin: 2, yMax: 18, prob: 0.00035, vein: 5, seed: 3000 },
     { id: RUBY_ORE,    yMin: 2, yMax: 16, prob: 0.00022, vein: 4, seed: 4000 },
     { id: EMERALD_ORE, yMin: 2, yMax: 14, prob: 0.00028, vein: 4, seed: 5000 },
+    { id: GRAVEL,      yMin: 3, yMax: 55, prob: 0.0012, vein: 7, seed: 6000 },
   ];
   for (const ore of oreData) {
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -1493,7 +1503,10 @@ function placeOresInChunk(data, cx, cz) {
             for (let i = 0; i < count; i++) {
               if (vx >= baseX && vx < baseX + CHUNK_SIZE && vz >= baseZ && vz < baseZ + CHUNK_SIZE) {
                 const vidx = ((vz - baseZ) * CHUNK_SIZE + (vx - baseX)) * MAX_Y + vy;
-                if (data[vidx] === STONE) data[vidx] = ore.id;
+                if (data[vidx] === STONE) {
+                  data[vidx] = ore.id;
+                  if (ore.id === GRAVEL) activateFallingBlock(vx, vy, vz);
+                }
               }
               const r1 = tHash(vx * 7 + i + ore.seed, vz * 11 + vy * 13);
               const r2 = tHash(vy * 3 + i, vx * 5 + ore.seed);
@@ -1596,9 +1609,12 @@ function setBlock(x, y, z, id) {
   const lx = x - cx * CHUNK_SIZE;
   const lz = z - cz * CHUNK_SIZE;
   const idx = (lz * CHUNK_SIZE + lx) * MAX_Y + y;
-  if (data[idx] === id) return;
+  const old = data[idx];
+  if (old === id) return;
   data[idx] = id;
   dirtyChunks.add(chunkKey(cx, cz));
+  if (id === SAND || id === GRAVEL) activateFallingBlock(x, y, z);
+  if (id === AIR && old !== AIR) activateFallingBlock(x, y + 1, z);
   if (!suppressNet) netSendBlock(x, y, z, id);
 }
 function isSolid(id) {
@@ -1614,8 +1630,14 @@ function isSolid(id) {
 const fluidLevels = new Map();
 const fluidFalling = new Set();
 const activeFluids = new Set();
+const fallingBlocks = new Set();
 
 function fluidKey(x, y, z) { return x + ',' + y + ',' + z; }
+function activateFallingBlock(x, y, z) {
+  if (x >= 0 && x < WORLD_W && y >= 0 && y < MAX_Y && z >= 0 && z < WORLD_D) {
+    fallingBlocks.add(fluidKey(x, y, z));
+  }
+}
 function addActive(x, y, z) {
   if (x < 0 || x >= WORLD_W || y < 0 || y >= MAX_Y || z < 0 || z >= WORLD_D) return;
   activeFluids.add(fluidKey(x, y, z));
@@ -1631,6 +1653,30 @@ function wakeFluid(x, y, z) {
 }
 
 let waterFlowTimer = 0, lavaFlowTimer = 0;
+let fallingBlockTimer = 0;
+
+function tickFallingBlocks() {
+  const batch = Array.from(fallingBlocks).slice(0, 500);
+  for (const key of batch) {
+    fallingBlocks.delete(key);
+    const [x, y, z] = key.split(',').map(Number);
+    const id = getBlock(x, y, z);
+    if (id !== SAND && id !== GRAVEL) continue;
+    if (isSolid(getBlock(x, y - 1, z))) continue;
+
+    const belowY = y - 1;
+    const displaced = getBlock(x, belowY, z);
+    setBlock(x, y, z, AIR);
+    setBlock(x, belowY, z, id);
+    if (isFluid(displaced)) wakeFluid(x, belowY, z);
+    activateFallingBlock(x, belowY, z);
+    activateFallingBlock(x, y + 1, z);
+    if (chunkMeshes.has(chunkKey(Math.floor(x / CHUNK_SIZE), Math.floor(z / CHUNK_SIZE)))) {
+      rebuildAround(x, y, z);
+      rebuildAround(x, belowY, z);
+    }
+  }
+}
 
 function tickFluid(id) {
   if (activeFluids.size === 0) return;
@@ -1726,10 +1772,13 @@ function updateFluids(dt) {
   waterFlowTimer += dt; lavaFlowTimer += dt;
   if (waterFlowTimer >= WATER_FLOW_INTERVAL) { waterFlowTimer = 0; tickFluid(WATER); }
   if (lavaFlowTimer >= LAVA_FLOW_INTERVAL) { lavaFlowTimer = 0; tickFluid(LAVA); }
+  fallingBlockTimer += dt;
+  if (fallingBlockTimer >= 0.12) { fallingBlockTimer %= 0.12; tickFallingBlocks(); }
 }
 function clearFluidState() {
   fluidLevels.clear(); fluidFalling.clear(); activeFluids.clear();
-  waterFlowTimer = 0; lavaFlowTimer = 0;
+  fallingBlocks.clear();
+  waterFlowTimer = 0; lavaFlowTimer = 0; fallingBlockTimer = 0;
 }
 
 /* ============================================================
@@ -3811,9 +3860,6 @@ document.getElementById('btn-singleplayer').onclick = async () => {
 document.getElementById('btn-import-definition').onclick = () => {
   document.getElementById('definition-file-input').click();
 };
-document.getElementById('btn-pause-import-definition').onclick = () => {
-  document.getElementById('definition-file-input').click();
-};
 document.getElementById('definition-file-input').addEventListener('change', async event => {
   const file = event.target.files && event.target.files[0];
   event.target.value = '';
@@ -3829,17 +3875,31 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
     prepared.definition.pendingGrant = previous
       ? previous.pendingGrant === true
       : !currentWorld;
-    const stored = [...customDefinitionsById.values()].filter(definition =>
-      definition.registry.id !== prepared.definition.registry.id);
-    stored.push(prepared.definition);
-    await saveCustomDefinitions(stored);
+    if (!serverOperatorCode) throw new Error('Unlock Server Settings before importing a definition.');
+    const sharedDefinition = { ...prepared.definition };
+    delete sharedDefinition.pendingGrant;
+    const response = await fetch(serverApiUrl('/api/definitions', NET.code || location.host || defaultServerAddr()), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+      body: JSON.stringify(sharedDefinition),
+    });
+    if (!response.ok) throw new Error(await response.text() || 'The server could not save the definition.');
+    let grantWarning = '';
+    if (prepared.definition.pendingGrant) {
+      const stored = [...customDefinitionsById.values()].filter(definition =>
+        definition.registry.id !== prepared.definition.registry.id);
+      stored.push(prepared.definition);
+      try {
+        await saveCustomDefinitions(stored);
+      } catch (error) {
+        console.error('Shared definition was saved, but its pending item grant could not be persisted:', error);
+        grantWarning = ' Your personal pending item grant could not be saved: ' + error.message;
+      }
+    }
     registerCustomDefinition(prepared.definition, prepared.modelTemplate);
     const added = !previous && currentWorld && addToInventory(prepared.definition.registry.id, 1) === 0;
     renderHotbar();
     if (inventoryOpen) renderInventory();
-    const availability = NET.role
-      ? ' Other players must import the same definition file to see its custom content.'
-      : '';
     toast((previous
       ? 'Updated ' + prepared.definition.name + '.'
       : 'Imported ' + prepared.definition.name +
@@ -3849,7 +3909,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
             ? '; it will be added when you enter a survival world.'
             : (currentWorld
               ? '; no hotbar slot was free, so make room and craft it from its recipe.'
-              : '; it is available in the creative inventory or through its recipe.')))) + availability);
+              : '; it is available in the creative inventory or through its recipe.')))) + grantWarning);
   } catch (error) {
     console.error('Could not import item definition:', error);
     toast('Could not import definition: ' + error.message, true);
@@ -4315,6 +4375,33 @@ async function deleteWorld(id) {
 
 /* Options */
 let optionsReturnTo = 'title';
+let serverOperatorCode = '';
+document.getElementById('btn-server-settings-unlock').onclick = async () => {
+  const code = document.getElementById('server-op-code').value;
+  if (!code) { toast('Enter the server operator code.', true); return; }
+  try {
+    const response = await fetch(serverApiUrl('/api/operator', NET.code || location.host || defaultServerAddr()), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
+    });
+    if (!response.ok) throw new Error(await response.text() || 'The code was rejected.');
+    serverOperatorCode = code;
+    document.getElementById('server-settings-tools').style.display = 'grid';
+    toast('Server settings unlocked.');
+  } catch (error) {
+    serverOperatorCode = '';
+    document.getElementById('server-settings-tools').style.display = 'none';
+    console.error('Could not unlock server settings:', error);
+    toast('Could not unlock server settings: ' + error.message, true);
+  }
+};
+document.getElementById('btn-server-settings-lock').onclick = () => {
+  serverOperatorCode = '';
+  document.getElementById('server-op-code').value = '';
+  document.getElementById('server-settings-tools').style.display = 'none';
+  toast('Server settings locked.');
+};
 function openOptions(from) {
   optionsReturnTo = from;
   document.getElementById('opt-render').value = options.renderDistance;
@@ -4521,7 +4608,8 @@ const CUSTOM_DEFINITIONS_KEY = 'coop_custom_definitions_v1';
 const MAX_CUSTOM_DEFINITION_BYTES = 32 * 1024 * 1024;
 function findFreeDefinitionId(kind) {
   const minimum = kind === 'tool' ? 119 : 30;
-  for (let id = minimum; id <= 65535; id++) {
+  const maximum = kind === 'tool' ? 65535 : 255;
+  for (let id = minimum; id <= maximum; id++) {
     if (!BLOCK_TYPES[id]) return id;
   }
   throw new Error('There are no free numeric IDs left for this definition type.');
@@ -4559,8 +4647,9 @@ function validateCustomDefinition(source) {
   }
   const kind = source.kind;
   const minimumId = kind === 'tool' ? 119 : 30;
+  const maximumId = kind === 'tool' ? 65535 : 255;
   const id = requireInteger(source.registry && source.registry.id !== undefined ? source.registry.id : findFreeDefinitionId(kind),
-    'Registry ID', minimumId, 65535);
+    'Registry ID', minimumId, maximumId);
   const atlasIndex = requireInteger(source.texture && source.texture.atlasIndex !== undefined
     ? source.texture.atlasIndex : findFreeCustomTile(), 'Atlas tile', 53, 55);
   if (!source.base || typeof source.base !== 'object') throw new Error('Definition base mechanics are missing.');
@@ -4887,6 +4976,35 @@ async function restoreCustomDefinitions() {
   }
 }
 await restoreCustomDefinitions();
+async function loadServerCustomDefinitions(addr) {
+  const response = await fetch(serverApiUrl('/api/definitions', addr));
+  if (!response.ok) throw new Error(await response.text() || 'Could not load shared server definitions.');
+  const definitions = await response.json();
+  if (!Array.isArray(definitions)) throw new Error('The server returned an invalid definition list.');
+  for (const source of definitions) {
+    try {
+      await installSharedDefinition(source, false);
+    } catch (error) {
+      console.error('Could not install a shared server definition:', error);
+    }
+  }
+}
+async function installSharedDefinition(source, notify = true) {
+  const prepared = await prepareCustomDefinition(source);
+  assertCustomDefinitionAvailable(prepared.definition);
+  delete prepared.definition.pendingGrant;
+  const existing = customDefinitionsById.get(prepared.definition.registry.id);
+  if (existing) {
+    const existingShared = { ...existing };
+    delete existingShared.pendingGrant;
+    if (JSON.stringify(existingShared) === JSON.stringify(prepared.definition)) return;
+  }
+  registerCustomDefinition(prepared.definition, prepared.modelTemplate);
+  if (notify) toast('Server added ' + prepared.definition.name + '.');
+}
+loadServerCustomDefinitions(location.host).catch(error => {
+  console.warn('Shared server definitions are unavailable:', error);
+});
 
 function matchRecipe() {
   const N = craftGridSize;
@@ -5369,6 +5487,14 @@ function serverWsUrl(addr) {
   addr = addr.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + addr + '/ws';
 }
+function serverApiUrl(path, addr) {
+  addr = String(addr || location.host || defaultServerAddr()).trim();
+  let origin;
+  if (/^https?:\/\//i.test(addr)) origin = addr.replace(/\/+$/, '');
+  else if (/^wss?:\/\//i.test(addr)) origin = addr.replace(/^ws/i, 'http').replace(/\/+$/, '');
+  else origin = (location.protocol === 'https:' ? 'https://' : 'http://') + addr.replace(/\/+$/, '');
+  return origin + path;
+}
 let coopStopping = false;
 const NET = {
   session: 0, role: null, peer: null, code: null, name: 'Player', selfId: null,
@@ -5753,6 +5879,12 @@ function guestOnData(d, sess) {
 }
 function guestHandle(d) {
   switch (d.t) {
+    case 'definition':
+      void installSharedDefinition(d.definition).catch(error => {
+        console.error('Could not install a shared server definition:', error);
+        toast('Could not install a shared server definition: ' + error.message, true);
+      });
+      break;
     case 'pvp-mode':
       pvpEnabled = d.enabled === true;
       pvpTarget = null;
@@ -5842,6 +5974,11 @@ async function joinGame(code, name) {
   showLoading();
   setLoadStage('Connecting to network...', 0.02);
   await yieldFrame();
+  try {
+    await loadServerCustomDefinitions(code);
+  } catch (error) {
+    console.warn('Could not load shared definitions from ' + code + ':', error);
+  }
   const sess = ++NET.session;
   try {
     const ws = new WebSocket(serverWsUrl(code));

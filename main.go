@@ -10,11 +10,13 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"math/rand"
@@ -23,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -81,7 +84,7 @@ type inMsg struct {
 	Pitch float64 `json:"pitch"`
 	ID    float64 `json:"id"`
 	M     string  `json:"m"`
-	Dmg   float64 `json:"dmg"`   // custom weapon stats (optional)
+	Dmg   float64 `json:"dmg"` // custom weapon stats (optional)
 	Reach float64 `json:"reach"`
 	Cd    float64 `json:"cd"`
 }
@@ -96,18 +99,27 @@ type saveFile struct {
 }
 
 type server struct {
-	mu       sync.Mutex
-	seed     int32
-	mode     string
-	pvp      bool
-	wtime    float64
-	spawn    *[3]float64
-	edits    map[uint32]uint8
-	players  map[int]*player
-	nextID   int
-	simID    int // player whose client runs the fluid simulation
-	dirty    bool
-	savePath string
+	mu             sync.Mutex
+	opMu           sync.Mutex
+	seed           int32
+	mode           string
+	pvp            bool
+	wtime          float64
+	spawn          *[3]float64
+	edits          map[uint32]uint8
+	players        map[int]*player
+	nextID         int
+	simID          int // player whose client runs the fluid simulation
+	dirty          bool
+	savePath       string
+	definitionsDir string
+	operatorCode   string
+	opAttempts     map[string]operatorAttempt
+}
+
+type operatorAttempt struct {
+	failures int
+	expires  time.Time
 }
 
 var upgrader = websocket.Upgrader{
@@ -568,6 +580,190 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func setAPICORS(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Server-Op-Code")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Cache-Control", "no-store")
+}
+
+func (s *server) authorizedOperator(code string) bool {
+	return s.operatorCode != "" &&
+		subtle.ConstantTimeCompare([]byte(code), []byte(s.operatorCode)) == 1
+}
+
+func (s *server) checkOperatorCode(r *http.Request, code string) (bool, bool) {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	now := time.Now()
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if s.opAttempts == nil {
+		s.opAttempts = map[string]operatorAttempt{}
+	}
+	attempt := s.opAttempts[host]
+	if now.After(attempt.expires) {
+		attempt = operatorAttempt{}
+	}
+	if attempt.failures >= 8 {
+		return false, true
+	}
+	if s.authorizedOperator(code) {
+		delete(s.opAttempts, host)
+		return true, false
+	}
+	if attempt.failures == 0 {
+		attempt.expires = now.Add(15 * time.Minute)
+	}
+	attempt.failures++
+	s.opAttempts[host] = attempt
+	return false, false
+}
+
+func writeAPIError(w http.ResponseWriter, status int, message string) {
+	http.Error(w, message, status)
+}
+
+func (s *server) handleOperator(w http.ResponseWriter, r *http.Request) {
+	setAPICORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeAPIError(w, http.StatusMethodNotAllowed, "Use POST to verify the operator code.")
+		return
+	}
+	if s.operatorCode == "" {
+		writeAPIError(w, http.StatusServiceUnavailable, "Server operator access is not configured.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var request struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "Invalid operator-code request.")
+		return
+	}
+	authorized, blocked := s.checkOperatorCode(r, request.Code)
+	if blocked {
+		writeAPIError(w, http.StatusTooManyRequests, "Too many incorrect operator-code attempts. Try again later.")
+		return
+	}
+	if !authorized {
+		writeAPIError(w, http.StatusUnauthorized, "Incorrect server operator code.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
+	setAPICORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		entries, err := os.ReadDir(s.definitionsDir)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "Could not read shared server definitions.")
+			log.Println("could not read shared definitions:", err)
+			return
+		}
+		definitions := make([]json.RawMessage, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(s.definitionsDir, entry.Name()))
+			if err != nil || !json.Valid(data) {
+				writeAPIError(w, http.StatusInternalServerError, "A shared server definition file could not be read.")
+				log.Printf("could not read shared definition %q: %v", entry.Name(), err)
+				return
+			}
+			definitions = append(definitions, json.RawMessage(data))
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(definitions); err != nil {
+			log.Println("could not return shared definitions:", err)
+		}
+	case http.MethodPost:
+		if s.operatorCode == "" {
+			writeAPIError(w, http.StatusServiceUnavailable, "Server operator access is not configured.")
+			return
+		}
+		authorized, blocked := s.checkOperatorCode(r, r.Header.Get("X-Server-Op-Code"))
+		if blocked {
+			writeAPIError(w, http.StatusTooManyRequests, "Too many incorrect operator-code attempts. Try again later.")
+			return
+		}
+		if !authorized {
+			writeAPIError(w, http.StatusUnauthorized, "Server operator access is required.")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "Definition file is too large or could not be read.")
+			return
+		}
+		var metadata struct {
+			Schema   string `json:"schema"`
+			Kind     string `json:"kind"`
+			Name     string `json:"name"`
+			Registry struct {
+				ID int `json:"id"`
+			} `json:"registry"`
+		}
+		if err := json.Unmarshal(data, &metadata); err != nil || !json.Valid(data) ||
+			(metadata.Schema != "coop1.10.item-block-definition.v1" &&
+				metadata.Schema != "coop1.10.item-block-definition.v2") ||
+			(metadata.Kind != "tool" && metadata.Kind != "block") ||
+			strings.TrimSpace(metadata.Name) == "" || metadata.Registry.ID > 65535 ||
+			(metadata.Kind == "block" && metadata.Registry.ID > 255) ||
+			(metadata.Kind == "tool" && metadata.Registry.ID < 119) ||
+			(metadata.Kind == "block" && (metadata.Registry.ID < 30 ||
+				metadata.Registry.ID == 99 || (metadata.Registry.ID >= 100 && metadata.Registry.ID <= 118))) {
+			writeAPIError(w, http.StatusBadRequest, "Invalid item/block definition JSON.")
+			return
+		}
+		path := filepath.Join(s.definitionsDir, fmt.Sprintf("%d.json", metadata.Registry.ID))
+		s.mu.Lock()
+		tmp, err := os.CreateTemp(s.definitionsDir, ".definition-*.tmp")
+		if err != nil {
+			s.mu.Unlock()
+			writeAPIError(w, http.StatusInternalServerError, "Could not save the shared definition.")
+			log.Println("could not save shared definition:", err)
+			return
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err = tmp.Write(data); err == nil {
+			err = tmp.Close()
+		} else {
+			_ = tmp.Close()
+		}
+		if err == nil {
+			err = os.Rename(tmpPath, path)
+		}
+		if err != nil {
+			s.mu.Unlock()
+			writeAPIError(w, http.StatusInternalServerError, "Could not save the shared definition.")
+			log.Println("could not save shared definition:", err)
+			return
+		}
+		s.broadcast(M{"t": "definition", "definition": json.RawMessage(data)}, nil)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "Use GET or POST for shared definitions.")
+	}
+}
+
 // ---------------------------------------------------------------- time + persistence
 
 func (s *server) loop() {
@@ -692,15 +888,25 @@ func main() {
 	mode := flag.String("mode", "survival", "survival or creative; only used when creating a new world")
 	pvp := flag.Bool("pvp", false, "PvP on at start; only used when creating a new world")
 	save := flag.String("save", "world.mcsrv.json", "world save file")
+	operatorCode := flag.String("op-code", "", "server operator code; required to unlock in-game server settings")
+	definitionsDir := flag.String("definitions-dir", filepath.Join("server_data", "definitions"), "folder for shared item/block JSON definitions")
 	useNgrok := flag.Bool("ngrok", false, "start an ngrok tunnel and print the public URL")
 	ngrokDomain := flag.String("ngrok-domain", "", "optional reserved ngrok domain, e.g. my-name.ngrok-free.app")
 	flag.Parse()
 
 	s := &server{
-		edits:    map[uint32]uint8{},
-		players:  map[int]*player{},
-		savePath: *save,
-		wtime:    startTime,
+		edits:          map[uint32]uint8{},
+		players:        map[int]*player{},
+		savePath:       *save,
+		definitionsDir: *definitionsDir,
+		operatorCode:   *operatorCode,
+		wtime:          startTime,
+	}
+	if err := os.MkdirAll(s.definitionsDir, 0o755); err != nil {
+		log.Fatal("could not create shared definitions folder: ", err)
+	}
+	if s.operatorCode == "" {
+		log.Println("server operator settings are disabled (set -op-code to enable them)")
 	}
 	if s.load() {
 		log.Printf("loaded world from %s (seed %d, %s, %d edits)", s.savePath, s.seed, s.mode, len(s.edits))
@@ -733,6 +939,8 @@ func main() {
 	}()
 
 	http.HandleFunc("/ws", s.handleWS)
+	http.HandleFunc("/api/operator", s.handleOperator)
+	http.HandleFunc("/api/definitions", s.handleDefinitions)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
