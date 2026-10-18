@@ -217,6 +217,66 @@ The `api` passed to hooks and services exposes:
 | `api.effects.playSound(name)` | Play a built-in sound effect. |
 | `api.effects.particle(name, x, y, z)` | Spawn a supported particle effect (`break`, `smoke`, `bubble`, `water`, or `lava`) near the player. |
 
+#### Raycasting
+
+Call `game.services.rayTrace(maxDistance, maxHits)` inside an item hook or feature. Both arguments are optional: the defaults are the supplied view snapshot's full range and hit count (up to 64 blocks and 64 results). The ray starts at the camera and points where the player is looking. It returns an array sorted nearest-first; `maxDistance` filters the results by distance and `maxHits` limits the number returned. The ray includes non-fluid solid blocks and living remote players; it does not include the local player or fluids. A hit's `distance` is the distance from the camera, and `position` is the point along the ray where it hit.
+
+```js
+onUse(game, api, event) {
+  // Use the ray snapshot already included with this event.
+  const target = event.rayHits.find(hit => hit.type === 'block');
+  if (!target) return;
+  console.log('Block ID:', target.id);
+  console.log('Block coordinates:', target.blockPosition.x, target.blockPosition.y, target.blockPosition.z);
+  console.log('Hit face:', target.face);
+
+  // Or request only the nearest hit within 12 blocks.
+  const nearest = game.services.rayTrace(12, 1)[0];
+  if (nearest?.type === 'player') {
+    console.log('Player in sight:', nearest.player.name);
+  }
+}
+```
+
+Each block hit includes `type: "block"`, `isBlock: true`, `isPlayer: false`, the block registry `id`, `distance`, world `position`, integer `blockPosition`, and hit `face`. Each player hit includes `type: "player"`, `isBlock: false`, `isPlayer: true`, player `id`, `distance`, hit `position`, and a `player` snapshot (`id`, `name`, `health`, `dead`, and feet `position`). Check `hit.type` before reading `blockPosition` or `player`; those details apply only to their respective hit type. `event.rayHits` is the precomputed default ray for the event, so use the service when you need a shorter range or fewer results.
+
+#### Projectiles
+
+Launch a projectile from an item hook (usually `onUse`) or feature callback with `api.projectiles.launch(options)`. It creates a visible projectile moving from the camera in the direction the player is looking by default:
+
+```js
+items: {
+  fireWand: {
+    onUse(game, api, event) {
+      api.projectiles.launch({
+        speed: 18,
+        lifetime: 4,
+        damage: 3
+      });
+    },
+    onProjectileHit(game, api, event) {
+      if (event.hit.type === 'block') {
+        console.log('Projectile hit block', event.hit.id, 'at', event.hit.position);
+        api.effects.particle('break', event.hit.position.x, event.hit.position.y, event.hit.position.z);
+      } else if (event.hit.type === 'player') {
+        console.log('Projectile hit player', event.attackedPlayer.name);
+      }
+    }
+  }
+}
+```
+
+`options` fields:
+| Field | Meaning |
+|---|---|
+| `speed` | Projectile speed; defaults to `16`, accepted range is `0.1`–`80`. |
+| `lifetime` | Seconds before the projectile expires; defaults to `5`, accepted range is `0.1`–`30`. |
+| `damage` | Value copied into `event.projectile.damage` (defaults to `0`, range `0`–`20`). It is metadata only and does not automatically damage a player or block. |
+| `direction` | Optional `{ x, y, z }` direction in world coordinates. If absent or invalid, the view direction is used. The direction is normalized. |
+| `origin` | Optional `{ x, y, z }` world position. It is used only if within 8 blocks of the camera; otherwise the projectile starts at the camera. |
+
+The projectile's originating item behavior or feature handler receives its `onProjectileHit` hook when it hits a solid block. Player collisions are checked only in an online game while PvP is enabled; then the event also has `event.attackedPlayer`. The hit event contains `event.projectile: { damage, age }`, `event.hit` (hit type and details), and the impact `event.position`. A projectile expires without a hit callback when its lifetime elapses. To apply an effect on impact, explicitly call an API from `onProjectileHit`, such as `api.effects.playSound`, `api.effects.particle`, or `api.world.setBlock`; `damage` alone never applies damage.
+
 Online player combat and shared time remain server-authoritative. Pack code runs without a per-player approval prompt in an isolated worker without game-page or network access. Hooks have a two-second time limit and actions are validated and bounded. Only import packs from server operators you trust.
 
 ## Render
