@@ -511,7 +511,7 @@
         <div style="font-size:10px;opacity:.7">The server operator sets this when starting the server with <code>-op-code</code>.</div>
         <button class="mc-btn" id="btn-server-settings-unlock">Unlock Server Settings</button>
         <div class="form" id="server-settings-tools" style="display:none">
-          <button class="mc-btn accent" id="btn-import-definition">Import Item / Block Definition</button>
+          <button class="mc-btn accent" id="btn-import-definition">Import Item / Block / Pack</button>
           <label for="server-game-mode">SERVER GAME MODE</label>
           <select class="mc-input" id="server-game-mode">
             <option value="survival">Survival</option>
@@ -3952,7 +3952,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
         : !currentWorld;
       const sharedDefinition = { ...definition };
       delete sharedDefinition.pendingGrant;
-      const response = await fetch(serverApiUrl('/api/definitions', NET.code || location.host || defaultServerAddr()), {
+      const response = await fetch(serverApiUrl('/api/definitions', serverOperatorAddress), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
         body: JSON.stringify(sharedDefinition),
@@ -3976,7 +3976,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
       imported++;
     }
     if (isPack) {
-      const response = await fetch(serverApiUrl('/api/packs', NET.code || location.host || defaultServerAddr()), {
+      const response = await fetch(serverApiUrl('/api/packs', serverOperatorAddress), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
         body: JSON.stringify(source),
@@ -4458,11 +4458,12 @@ async function deleteWorld(id) {
 /* Options */
 let optionsReturnTo = 'title';
 let serverOperatorCode = '';
+let serverOperatorAddress = '';
 document.getElementById('btn-server-settings-unlock').onclick = async () => {
   const code = document.getElementById('server-op-code').value;
   if (!code) { toast('Enter the server operator code.', true); return; }
   try {
-    const addr = NET.code || location.host || defaultServerAddr();
+    const addr = activeServerAddr();
     const response = await fetch(serverApiUrl('/api/operator', addr), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4484,10 +4485,12 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
       String(Math.floor(minutes / 60) % 24).padStart(2, '0') + ':' +
       String(minutes % 60).padStart(2, '0');
     serverOperatorCode = code;
+    serverOperatorAddress = addr;
     document.getElementById('server-settings-tools').style.display = 'flex';
     toast('Server settings unlocked.');
   } catch (error) {
     serverOperatorCode = '';
+    serverOperatorAddress = '';
     document.getElementById('server-settings-tools').style.display = 'none';
     console.error('Could not unlock server settings:', error);
     toast('Could not unlock server settings: ' + error.message, true);
@@ -4501,7 +4504,7 @@ document.getElementById('btn-server-settings-apply').onclick = async () => {
     return;
   }
   try {
-    const response = await fetch(serverApiUrl('/api/settings', NET.code || location.host || defaultServerAddr()), {
+    const response = await fetch(serverApiUrl('/api/settings', serverOperatorAddress), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
       body: JSON.stringify({
@@ -4523,6 +4526,7 @@ document.getElementById('server-pvp-knockback').addEventListener('input', event 
 });
 document.getElementById('btn-server-settings-lock').onclick = () => {
   serverOperatorCode = '';
+  serverOperatorAddress = '';
   document.getElementById('server-op-code').value = '';
   document.getElementById('server-settings-tools').style.display = 'none';
   toast('Server settings locked.');
@@ -5213,8 +5217,18 @@ async function runCustomFeatureHook(definition, hook, context, hookRef = null) {
   }
 }
 const customProjectiles = [];
-const customProjectileGeometry = new THREE.SphereGeometry(0.12, 8, 6);
-const customProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffd35a });
+const customProjectileCoreGeometry = new THREE.SphereGeometry(0.2, 12, 8);
+const customProjectileGlowGeometry = new THREE.SphereGeometry(0.42, 12, 8);
+const customProjectileTrailGeometry = new THREE.CylinderGeometry(0.025, 0.12, 1.15, 8, 1, true);
+const customProjectileCoreMaterial = new THREE.MeshBasicMaterial({ color: 0xfff4a3 });
+const customProjectileGlowMaterial = new THREE.MeshBasicMaterial({
+  color: 0xff982f, transparent: true, opacity: 0.65,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const customProjectileTrailMaterial = new THREE.MeshBasicMaterial({
+  color: 0xffff62, transparent: true, opacity: 0.8,
+  blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+});
 function spawnCustomProjectile(definition, options, hookRef = null) {
   if (customProjectiles.length >= 128) return;
   const speed = Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
@@ -5232,8 +5246,14 @@ function spawnCustomProjectile(definition, options, hookRef = null) {
     const requested = new THREE.Vector3(options.origin.x, options.origin.y, options.origin.z);
     if (requested.distanceTo(origin) <= 8) origin.copy(requested);
   }
-  const mesh = new THREE.Mesh(customProjectileGeometry, customProjectileMaterial);
+  const mesh = new THREE.Group();
+  const trail = new THREE.Mesh(customProjectileTrailGeometry, customProjectileTrailMaterial);
+  trail.position.y = -0.575;
+  mesh.add(trail);
+  mesh.add(new THREE.Mesh(customProjectileGlowGeometry, customProjectileGlowMaterial));
+  mesh.add(new THREE.Mesh(customProjectileCoreGeometry, customProjectileCoreMaterial));
   mesh.position.copy(origin);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
   scene.add(mesh);
   customProjectiles.push({
     definition, hookRef, mesh, position: origin, direction, speed, lifetime, age: 0,
@@ -6436,9 +6456,14 @@ const NET_VERSION = 3;          // must match the Go server
 const MAX_PLAYERS = 8;
 const EDIT_CHUNK  = 48000;
 function defaultServerAddr() {
+  const joinAddress = document.getElementById('input-join-code');
+  if (joinAddress && joinAddress.value.trim()) return joinAddress.value.trim();
   let a = '';
   try { a = localStorage.getItem('mcServerAddr') || ''; } catch (e) {}
   return a || location.host || 'localhost:8080';
+}
+function activeServerAddr() {
+  return NET.code || defaultServerAddr();
 }
 function serverWsUrl(addr) {
   addr = String(addr || '').trim();
