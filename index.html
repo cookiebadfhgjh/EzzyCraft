@@ -418,6 +418,7 @@
     </div>
     <div class="menu-buttons">
       <button class="mc-btn" id="btn-singleplayer">Singleplayer</button>
+      <button class="mc-btn accent" id="btn-import-definition">Import Item / Block Definition</button>
       <button class="mc-btn accent" id="btn-join-online">Join Online Game</button>
       <button class="mc-btn" id="btn-options">Options...</button>
       <button class="mc-btn" id="btn-quit">Quit Game</button>
@@ -517,6 +518,7 @@
       </div>
       <button class="mc-btn danger" id="btn-close-room" style="display:none">Close Online Room</button>
       <button class="mc-btn" id="btn-pause-options">Options...</button>
+      <button class="mc-btn" id="btn-pause-import-definition">Import Item / Block Definition</button>
       <button class="mc-btn" id="btn-save-file">Save World to File</button>
       <button class="mc-btn accent" id="btn-save-quit">Save and Quit to Title</button>
     </div>
@@ -537,9 +539,14 @@
 </div>
 
 <input type="file" id="file-input" accept=".mcworld,.json,application/json" style="display:none">
+<input type="file" id="definition-file-input" accept=".json,application/json" style="display:none">
 
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
+</script>
 <script type="module">
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js';
 THREE.ColorManagement.enabled = false;
 
 /* Shared flags used by the co-op hooks (declared before use) */
@@ -600,8 +607,9 @@ const BLOCK_HARDNESS = {
 };
 const DURABILITY = {
   [WOOD_PICKAXE]: 60, [STONE_PICKAXE]: 132, [IRON_PICKAXE]: 251,
-  [GOLD_PICKAXE]: 33, [DIAMOND_PICKAXE]: 1562,
+  [GOLD_PICKAXE]: 33, [DIAMOND_PICKAXE]: 1562, 
 };
+DURABILITY[119] = 500
 
 const WATER_FLOW_INTERVAL = 0.5;
 const LAVA_FLOW_INTERVAL  = 1.5;
@@ -1092,12 +1100,18 @@ function createAtlasCanvas() {
   return canvas;
 }
 
+TILE_FNS[53] = (x, y) => { const c = [null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,[184,196,204,1],[184,196,204,1],null,null,null,null,null,null,null,null,null,null,null,null,null,[119,119,119,1],[184,196,204,1],[184,196,204,1],[184,196,204,1],null,null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[112,69,45,1],[119,119,119,1],[184,196,204,1],[119,119,119,1],null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[112,69,45,1],null,null,[119,119,119,1],null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[183,121,67,1],null,null,null,null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[112,69,45,1],null,null,null,null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[183,121,67,1],null,null,null,null,null,null,null,null,null,null,null,null,null,[112,69,45,1],[183,121,67,1],null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null][y * 16 + x]; return c || [0, 0, 0, 0]; };
 const atlasCanvas = createAtlasCanvas();
 const atlasTexture = new THREE.CanvasTexture(atlasCanvas);
 atlasTexture.magFilter = THREE.NearestFilter;
 atlasTexture.minFilter = THREE.NearestFilter;
 atlasTexture.generateMipmaps = false;
 atlasTexture.colorSpace = THREE.NoColorSpace;
+const customDefinitionsById = new Map();
+const customBlockDefinitions = new Map();
+const customModelTemplates = new Map();
+const customSmeltTimes = new Map();
+const gltfLoader = new GLTFLoader();
 
 const BLOCK_TILES = {
   1: { top: 0, side: 1, bottom: 2 },
@@ -1134,6 +1148,7 @@ const BLOCK_TILES = {
   116: { all: 43, isItem: true },
   117: { all: 44, isItem: true },
   118: { all: 42, isItem: true },
+  119: { all: 53, isItem: true },
 };
 
 const BLOCK_TYPES = {
@@ -1173,6 +1188,19 @@ const BLOCK_TYPES = {
   118: { name: 'Bucket', isItem: true, maxStack: 1 },
 };
 
+BLOCK_TYPES[119] = {
+  "name": "iron_axe",
+  "isItem": true,
+  "isTool": true,
+  "tool": "axe",
+  "speed": 1.5,
+  "maxStack": 1,
+  "damage": 2,
+  "attackCooldown": 0.9,
+  "reach": 4,
+  "harvestLevel": 1
+};
+
 function getTileForFace(id, dir) {
   const t = BLOCK_TILES[id];
   if (!t) return 0;
@@ -1183,7 +1211,8 @@ function getTileForFace(id, dir) {
 }
 function isPickaxeBlock(id) {
   return id === STONE || id === BRICK || id === STONE_BRICKS || id === FURNACE ||
-         (id >= IRON_ORE && id <= EMERALD_ORE) || id === COAL_ORE;
+         (id >= IRON_ORE && id <= EMERALD_ORE) || id === COAL_ORE ||
+         customBlockDefinitions.get(id)?.effectiveTool === 'pickaxe';
 }
 function getBreakTime(id, heldItemId) {
   const hardness = BLOCK_HARDNESS[id];
@@ -1191,12 +1220,16 @@ function getBreakTime(id, heldItemId) {
   if (hardness === Infinity) return hardness;
   if (hardness <= 0) return 0.001;
   const tool = BLOCK_TYPES[heldItemId];
-  if (tool && tool.isTool && tool.tool === 'pickaxe' && isPickaxeBlock(id)) {
+  const blockTool = customBlockDefinitions.get(id)?.effectiveTool;
+  const effectiveTool = blockTool && blockTool !== 'none' ? blockTool : (isPickaxeBlock(id) ? 'pickaxe' : null);
+  if (tool && tool.isTool && tool.tool === effectiveTool && tool.speed > 0) {
     return hardness / tool.speed;
   }
   return hardness;
 }
 function getOreDrop(id) {
+  const custom = customBlockDefinitions.get(id);
+  if (custom) return custom.dropItemId === 'self' ? id : custom.dropItemId;
   if (id === IRON_ORE) return RAW_IRON;
   if (id === GOLD_ORE) return RAW_GOLD;
   if (id === COAL_ORE) return COAL;
@@ -1571,6 +1604,7 @@ function setBlock(x, y, z, id) {
 function isSolid(id) {
   if (id === AIR || id === WATER || id === LAVA) return false;
   if (isPlantBlock(id)) return false;
+  if (customBlockDefinitions.has(id)) return customBlockDefinitions.get(id).solid !== false;
   return true;
 }
 
@@ -1862,8 +1896,13 @@ const craterMat = new THREE.MeshBasicMaterial({ color: 0xc0c0b8, fog: false, dep
 
 /* Hand */
 const handScene = new THREE.Scene();
+handScene.add(new THREE.AmbientLight(0xffffff, 2));
+const handKeyLight = new THREE.DirectionalLight(0xffffff, 2);
+handKeyLight.position.set(-1, 2, 1);
+handScene.add(handKeyLight);
 const handCamera = new THREE.PerspectiveCamera(50, 1, 0.01, 10);
 let handItemMesh = null, handCurrentId = -1, handSwingT = 0, handSwingActive = false, handBobPhase = 0;
+let handItemIsCustomModel = false;
 function makeItemTexture(blockId) {
   const tile = getTileForFace(blockId, [1, 0, 0]);
   const T = ATLAS_TILE;
@@ -1886,12 +1925,23 @@ function updateHandItem() {
   handCurrentId = newId;
   if (handItemMesh) {
     handScene.remove(handItemMesh);
-    handItemMesh.geometry.dispose();
-    if (handItemMesh.material.map) handItemMesh.material.map.dispose();
-    handItemMesh.material.dispose();
+    if (!handItemIsCustomModel) {
+      handItemMesh.geometry.dispose();
+      if (handItemMesh.material.map) handItemMesh.material.map.dispose();
+      handItemMesh.material.dispose();
+    }
     handItemMesh = null;
   }
+  handItemIsCustomModel = false;
   if (newId === 0) return;
+  const customModel = customModelTemplates.get(newId);
+  if (customModel) {
+    handItemMesh = customModel.clone(true);
+    handItemIsCustomModel = true;
+    handItemMesh.renderOrder = 100;
+    handScene.add(handItemMesh);
+    return;
+  }
   const def = BLOCK_TYPES[newId];
   const isItem = def && def.isItem;
   const tex = makeItemTexture(newId);
@@ -2572,6 +2622,7 @@ function buildChunk(cx, cz) {
     if (old.water)  { scene.remove(old.water);  old.water.geometry.dispose(); }
     if (old.lava)   { scene.remove(old.lava);   old.lava.geometry.dispose(); }
     if (old.plants) { scene.remove(old.plants); old.plants.geometry.dispose(); }
+    if (old.custom) scene.remove(old.custom);
     chunkMeshes.delete(key);
   }
   let data = chunkData.get(key);
@@ -2581,6 +2632,7 @@ function buildChunk(cx, cz) {
   const wPos = [], wNorm = [], wUv = [], wIdx = [];
   const lPos = [], lNorm = [], lUv = [], lIdx = [];
   const pPos = [], pNorm = [], pCol = [], pUv = [], pIdx = [];
+  const custom = new THREE.Group();
   let ov = 0, wv = 0, lv = 0, pv = 0;
 
   const baseX = cx * CHUNK_SIZE, baseZ = cz * CHUNK_SIZE;
@@ -2594,6 +2646,14 @@ function buildChunk(cx, cz) {
       for (let y = 0; y < MAX_Y; y++) {
         const id = data[columnBase + y];
         if (id === AIR) continue;
+
+        const customTemplate = customBlockDefinitions.has(id) ? customModelTemplates.get(id) : null;
+        if (customTemplate) {
+          const instance = customTemplate.clone(true);
+          instance.position.set(x + 0.5, y + 0.5, z + 0.5);
+          custom.add(instance);
+          continue;
+        }
 
         if (isPlantBlock(id)) {
           const tile = getTileForFace(id, [0, 1, 0]);
@@ -2739,7 +2799,8 @@ function buildChunk(cx, cz) {
     plants = new THREE.Mesh(geo, plantMaterial);
     plants.frustumCulled = true; plants.renderOrder = 4; scene.add(plants);
   }
-  if (opaque || water || lava || plants) chunkMeshes.set(key, { opaque, water, lava, plants });
+  if (custom.children.length > 0) scene.add(custom);
+  if (opaque || water || lava || plants || custom.children.length > 0) chunkMeshes.set(key, { opaque, water, lava, plants, custom });
 }
 function rebuildAround(x, y, z) {
   const cx = Math.floor(x / CHUNK_SIZE);
@@ -2770,6 +2831,7 @@ function clearAllChunks() {
     if (m.water)  { scene.remove(m.water);  m.water.geometry.dispose(); }
     if (m.lava)   { scene.remove(m.lava);   m.lava.geometry.dispose(); }
     if (m.plants) { scene.remove(m.plants); m.plants.geometry.dispose(); }
+    if (m.custom) scene.remove(m.custom);
   }
   chunkMeshes.clear();
 }
@@ -3124,6 +3186,27 @@ function addToInventory(id, count) {
   }
   return remaining;
 }
+async function grantPendingCustomItems() {
+  if (gameMode !== 'survival') return;
+  const granted = [];
+  for (const definition of customDefinitionsById.values()) {
+    if (definition.pendingGrant !== true) continue;
+    if (addToInventory(definition.registry.id, 1) === 0) {
+      definition.pendingGrant = false;
+      granted.push(definition);
+    }
+  }
+  if (!granted.length) return;
+  try {
+    await saveCustomDefinitions([...customDefinitionsById.values()]);
+  } catch (error) {
+    for (const definition of granted) definition.pendingGrant = true;
+    console.error('Could not save imported-item grant state:', error);
+    toast('Imported item was added, but its grant could not be saved: ' + error.message, true);
+  }
+  renderHotbar();
+  toast('Added imported item' + (granted.length === 1 ? '' : 's') + ' to your hotbar.');
+}
 function restoreInventory(saved) {
   hotbar = new Array(HOTBAR_SIZE).fill(null);
   if (!Array.isArray(saved)) return;
@@ -3342,7 +3425,9 @@ function getDropMaterial(id) {
 }
 function spawnDrop(x, y, z, id, count) {
   if (drops.length >= MAX_DROPS) { const old = drops.shift(); scene.remove(old.mesh); }
-  const mesh = new THREE.Mesh(DROP_GEO, getDropMaterial(id));
+  const customTemplate = customModelTemplates.get(id);
+  const mesh = customTemplate ? customTemplate.clone(true) : new THREE.Mesh(DROP_GEO, getDropMaterial(id));
+  if (customTemplate) mesh.scale.setScalar(0.35);
   const pos = new THREE.Vector3(x, y, z);
   mesh.position.copy(pos); scene.add(mesh);
   const d = {
@@ -3723,6 +3808,53 @@ document.getElementById('btn-singleplayer').onclick = async () => {
   setMenuState('worlds');
   await renderWorldList();
 };
+document.getElementById('btn-import-definition').onclick = () => {
+  document.getElementById('definition-file-input').click();
+};
+document.getElementById('btn-pause-import-definition').onclick = () => {
+  document.getElementById('definition-file-input').click();
+};
+document.getElementById('definition-file-input').addEventListener('change', async event => {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  try {
+    if (!file.name.toLowerCase().endsWith('.json') || file.size > MAX_CUSTOM_DEFINITION_BYTES) {
+      throw new Error('Choose an item-definition JSON file no larger than 32 MB.');
+    }
+    const source = JSON.parse(await file.text());
+    const prepared = await prepareCustomDefinition(source);
+    assertCustomDefinitionAvailable(prepared.definition);
+    const previous = customDefinitionsById.get(prepared.definition.registry.id);
+    prepared.definition.pendingGrant = previous
+      ? previous.pendingGrant === true
+      : !currentWorld;
+    const stored = [...customDefinitionsById.values()].filter(definition =>
+      definition.registry.id !== prepared.definition.registry.id);
+    stored.push(prepared.definition);
+    await saveCustomDefinitions(stored);
+    registerCustomDefinition(prepared.definition, prepared.modelTemplate);
+    const added = !previous && currentWorld && addToInventory(prepared.definition.registry.id, 1) === 0;
+    renderHotbar();
+    if (inventoryOpen) renderInventory();
+    const availability = NET.role
+      ? ' Other players must import the same definition file to see its custom content.'
+      : '';
+    toast((previous
+      ? 'Updated ' + prepared.definition.name + '.'
+      : 'Imported ' + prepared.definition.name +
+        (added
+          ? ' and added it to your hotbar.'
+          : (prepared.definition.pendingGrant
+            ? '; it will be added when you enter a survival world.'
+            : (currentWorld
+              ? '; no hotbar slot was free, so make room and craft it from its recipe.'
+              : '; it is available in the creative inventory or through its recipe.')))) + availability);
+  } catch (error) {
+    console.error('Could not import item definition:', error);
+    toast('Could not import definition: ' + error.message, true);
+  }
+});
 document.getElementById('btn-options').onclick = () => openOptions('title');
 document.getElementById('btn-quit').onclick = () => alert('Close the browser tab to quit.');
 document.getElementById('btn-worlds-back').onclick = () => setMenuState('title');
@@ -3980,6 +4112,7 @@ document.getElementById('btn-create-confirm').onclick = async () => {
     resetPlayerStateForWorld();
     clearInventory();
     if (gameMode === 'creative') giveCreativeItems();
+    await grantPendingCustomItems();
     craftGridSize = 2;
     craftGrid = new Array(4).fill(null);
     craftSelectedId = null;
@@ -4056,6 +4189,7 @@ async function enterWorld(meta) {
     resetPlayerStateForWorld();
     if (ps && Array.isArray(ps.inventory)) restoreInventory(ps.inventory);
     else { clearInventory(); if (gameMode === 'creative') giveCreativeItems(); }
+    await grantPendingCustomItems();
     craftGridSize = 2;
     craftGrid = new Array(4).fill(null);
     craftSelectedId = null;
@@ -4381,10 +4515,385 @@ const RECIPES = [
   { type: 'shaped', pattern: [[COAL], [STICK]], result: { id: TORCH, count: 4 } },
   { type: 'shaped', pattern: [[IRON_INGOT, 0, IRON_INGOT], [0, IRON_INGOT, 0]], result: { id: BUCKET, count: 1 } },
 ];
+RECIPES.push({"type":"shaped","pattern":[[0,110,110],[0,100,110],[0,100,0]],"result":{"id":119,"count":1}});
+
+const CUSTOM_DEFINITIONS_KEY = 'coop_custom_definitions_v1';
+const MAX_CUSTOM_DEFINITION_BYTES = 32 * 1024 * 1024;
+function findFreeDefinitionId(kind) {
+  const minimum = kind === 'tool' ? 119 : 30;
+  for (let id = minimum; id <= 65535; id++) {
+    if (!BLOCK_TYPES[id]) return id;
+  }
+  throw new Error('There are no free numeric IDs left for this definition type.');
+}
+function findFreeCustomTile() {
+  const used = new Set();
+  for (const tileDef of Object.values(BLOCK_TILES)) {
+    if (tileDef.all !== undefined) used.add(tileDef.all);
+    if (tileDef.top !== undefined) used.add(tileDef.top);
+    if (tileDef.side !== undefined) used.add(tileDef.side);
+    if (tileDef.bottom !== undefined) used.add(tileDef.bottom);
+  }
+  for (const definition of customDefinitionsById.values()) used.add(definition.texture.atlasIndex);
+  for (let tile = 53; tile <= 55; tile++) if (!used.has(tile)) return tile;
+  throw new Error('No unused custom texture atlas tiles remain (53–55).');
+}
+function requireInteger(value, label, min, max) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < min || number > max) {
+    throw new Error(label + ' must be a whole number from ' + min + ' to ' + max + '.');
+  }
+  return number;
+}
+function validateCustomDefinition(source) {
+  if (!source || !['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(source.schema)) {
+    throw new Error('Unsupported definition file. Export an item/block JSON bundle from Co-op Sprite Studio.');
+  }
+  if (!['tool', 'block'].includes(source.kind)) throw new Error('Definition kind must be tool or block.');
+  if (!source.sprite || ![16, 32, 64].includes(source.sprite.width) ||
+      source.sprite.height !== source.sprite.width ||
+      !Array.isArray(source.sprite.pixels) ||
+      source.sprite.pixels.length !== source.sprite.width * source.sprite.height ||
+      !source.sprite.pixels.every(pixel => pixel === null || (typeof pixel === 'string' && /^#[0-9a-f]{6}$/i.test(pixel)))) {
+    throw new Error('Definition sprite pixels are missing or invalid.');
+  }
+  const kind = source.kind;
+  const minimumId = kind === 'tool' ? 119 : 30;
+  const id = requireInteger(source.registry && source.registry.id !== undefined ? source.registry.id : findFreeDefinitionId(kind),
+    'Registry ID', minimumId, 65535);
+  const atlasIndex = requireInteger(source.texture && source.texture.atlasIndex !== undefined
+    ? source.texture.atlasIndex : findFreeCustomTile(), 'Atlas tile', 53, 55);
+  if (!source.base || typeof source.base !== 'object') throw new Error('Definition base mechanics are missing.');
+  const base = { ...source.base };
+  if (kind === 'tool') {
+    base.toolType = base.toolType || 'none';
+    base.harvestLevel = base.harvestLevel ?? 0;
+    if (!['pickaxe', 'axe', 'shovel', 'hoe', 'sword', 'none'].includes(base.toolType)) {
+      throw new Error('Tool type is invalid.');
+    }
+    for (const [field, min, max] of [
+      ['damage', 0, 1000], ['cooldownSeconds', 0, 60], ['reachBlocks', 0, 32],
+      ['durabilityUses', 1, 1000000], ['miningSpeedMultiplier', 0, 100],
+      ['harvestLevel', 0, 255], ['maxStack', 1, 64],
+    ]) {
+      if (!Number.isFinite(Number(base[field])) || Number(base[field]) < min || Number(base[field]) > max) {
+        throw new Error('Tool ' + field + ' value is outside its supported range.');
+      }
+    }
+    base.durabilityUses = requireInteger(base.durabilityUses, 'Durability', 1, 1000000);
+    base.maxStack = requireInteger(base.maxStack, 'Maximum stack size', 1, 64);
+  } else {
+    if (base.hardnessSeconds === undefined && Number.isFinite(Number(base.hardness))) {
+      base.hardnessSeconds = Number(base.hardness);
+    }
+    base.unbreakable = base.unbreakable === true;
+    base.effectiveTool = base.effectiveTool || 'none';
+    base.toolSpeed = base.toolSpeed === undefined ? 1 : Number(base.toolSpeed);
+    base.dropItemId = base.dropItemId === undefined || base.dropItemId === '' ? 'self' : base.dropItemId;
+    base.dropCount = base.dropCount === undefined ? 1 : base.dropCount;
+    base.solid = base.solid !== false;
+    base.transparent = base.transparent === true;
+    base.light = base.light ?? 0;
+    if (!Number.isFinite(Number(base.hardnessSeconds)) && base.unbreakable !== true) {
+      throw new Error('Block hardness must be a finite number or the block must be marked unbreakable.');
+    }
+    if (!['none', 'pickaxe', 'axe', 'shovel', 'hoe', 'shears'].includes(base.effectiveTool || 'none')) {
+      throw new Error('Block effective tool is invalid.');
+    }
+    base.hardnessSeconds = base.unbreakable === true ? null : Number(base.hardnessSeconds);
+    base.maxStack = requireInteger(base.maxStack, 'Maximum stack size', 1, 64);
+    base.dropCount = requireInteger(base.dropCount, 'Drop count', 0, 64);
+    if (base.dropItemId !== 'self') base.dropItemId = requireInteger(base.dropItemId, 'Drop item ID', 1, 65535);
+    base.effectiveTool = base.effectiveTool || 'none';
+    base.toolSpeed = Number(base.toolSpeed) || 0;
+    if (base.toolSpeed < 0 || base.toolSpeed > 100) throw new Error('Block tool speed must be between 0 and 100.');
+  }
+  if (source.mesh && (source.mesh.mimeType !== 'model/gltf-binary' || typeof source.mesh.base64 !== 'string' || !source.mesh.base64)) {
+    throw new Error('Mesh data must be embedded as a binary glTF (.glb).');
+  }
+  let recipe = source.recipe || null;
+  if (recipe) {
+    if (!['shaped', 'shapeless', 'smelting'].includes(recipe.type)) throw new Error('Recipe type is invalid.');
+    recipe = JSON.parse(JSON.stringify(recipe));
+    recipe.result = { id, count: requireInteger(recipe.result && recipe.result.count, 'Recipe output count', 1, 64) };
+    if (recipe.type === 'shaped') {
+      if (!Array.isArray(recipe.pattern) || recipe.pattern.length < 1 || recipe.pattern.length > 3 ||
+          !recipe.pattern.every(row => Array.isArray(row) && row.length === recipe.pattern[0].length && row.length >= 1 && row.length <= 3)) {
+        throw new Error('Shaped recipe must be a rectangular pattern no larger than 3×3.');
+      }
+      for (const row of recipe.pattern) for (const ingredient of row) requireInteger(ingredient, 'Recipe ingredient ID', 0, 65535);
+      if (recipe.pattern.every(row => row.every(ingredient => ingredient === 0))) throw new Error('Shaped recipe must have an ingredient.');
+      recipe.station = recipe.station === 'inventory' ? 'inventory' : 'crafting_table';
+    } else if (recipe.type === 'shapeless') {
+      if (!recipe.ingredients || typeof recipe.ingredients !== 'object' || Array.isArray(recipe.ingredients)) {
+        throw new Error('Shapeless recipe ingredients are invalid.');
+      }
+      let count = 0;
+      for (const [ingredient, amount] of Object.entries(recipe.ingredients)) {
+        requireInteger(ingredient, 'Recipe ingredient ID', 1, 65535);
+        count += requireInteger(amount, 'Ingredient count', 1, 64);
+      }
+      if (count < 1 || count > 9) throw new Error('Shapeless recipe must use between 1 and 9 ingredients.');
+      recipe.station = recipe.station === 'inventory' ? 'inventory' : 'crafting_table';
+    } else {
+      recipe.input = { id: requireInteger(recipe.input && recipe.input.id, 'Furnace input ID', 1, 65535), count: 1 };
+      recipe.smeltingSeconds = Number(recipe.smeltingSeconds);
+      if (!Number.isFinite(recipe.smeltingSeconds) || recipe.smeltingSeconds < 0.1 || recipe.smeltingSeconds > 3600) {
+        throw new Error('Smelting time must be between 0.1 and 3600 seconds.');
+      }
+      recipe.station = 'furnace';
+    }
+  }
+  const definition = {
+    ...source,
+    schema: 'coop1.10.item-block-definition.v2',
+    name: typeof source.name === 'string' && source.name.trim() ? source.name.trim().slice(0, 48) : 'Imported item',
+    registry: { ...(source.registry || {}), id, key: source.registry && source.registry.key || ('custom_' + id) },
+    texture: { ...(source.texture || {}), atlasIndex },
+    base,
+    recipe,
+  };
+  return definition;
+}
+function makeCustomModelTemplate(meshDefinition) {
+  if (!meshDefinition || !meshDefinition.base64) return Promise.resolve(null);
+  let binary;
+  try {
+    const raw = atob(meshDefinition.base64);
+    if (raw.length < 20 || raw.length > 20 * 1024 * 1024) throw new Error('Embedded GLB must be 20 MB or smaller.');
+    binary = Uint8Array.from(raw, character => character.charCodeAt(0));
+  } catch (error) {
+    throw new Error('Could not decode embedded GLB: ' + error.message);
+  }
+  const view = new DataView(binary.buffer);
+  const totalLength = view.getUint32(8, true);
+  const jsonLength = view.getUint32(12, true);
+  const jsonChunkType = view.getUint32(16, true);
+  if (view.getUint32(0, true) !== 0x46546c67 || view.getUint32(4, true) !== 2 ||
+      totalLength !== binary.byteLength || jsonChunkType !== 0x4e4f534a ||
+      jsonLength < 2 || 20 + jsonLength > binary.byteLength) {
+    throw new Error('Embedded mesh is not a valid GLB 2.0 file.');
+  }
+  let glbJson;
+  try {
+    glbJson = JSON.parse(new TextDecoder().decode(binary.subarray(20, 20 + jsonLength)).trim());
+  } catch {
+    throw new Error('Embedded GLB has an invalid JSON chunk.');
+  }
+  const externalUris = [
+    ...(Array.isArray(glbJson.buffers) ? glbJson.buffers : []),
+    ...(Array.isArray(glbJson.images) ? glbJson.images : []),
+  ].map(entry => entry.uri).filter(uri => typeof uri === 'string' && !uri.startsWith('data:'));
+  if (externalUris.length) throw new Error('GLB must embed its resources; external file URLs are not supported.');
+  const arrayBuffer = binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.byteLength);
+  return new Promise((resolve, reject) => {
+    gltfLoader.parse(arrayBuffer, '', gltf => {
+      const bounds = new THREE.Box3().setFromObject(gltf.scene);
+      const size = bounds.getSize(new THREE.Vector3());
+      const maxDimension = Math.max(size.x, size.y, size.z);
+      if (!Number.isFinite(maxDimension) || maxDimension <= 0) {
+        reject(new Error('GLB does not contain visible geometry.'));
+        return;
+      }
+      const center = bounds.getCenter(new THREE.Vector3());
+      const scale = 0.9 / maxDimension;
+      gltf.scene.scale.multiplyScalar(scale);
+      gltf.scene.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+      const template = new THREE.Group();
+      template.add(gltf.scene);
+      resolve(template);
+    }, error => reject(new Error('Could not load embedded GLB: ' + (error && error.message || error))));
+  });
+}
+function paintCustomAtlasTile(definition) {
+  const tile = definition.texture.atlasIndex;
+  const col = tile % ATLAS_COLS, row = Math.floor(tile / ATLAS_COLS);
+  const ctx = atlasCanvas.getContext('2d');
+  const image = ctx.createImageData(ATLAS_TILE, ATLAS_TILE);
+  const size = definition.sprite.width;
+  for (let y = 0; y < ATLAS_TILE; y++) for (let x = 0; x < ATLAS_TILE; x++) {
+    const sourceX = Math.floor(x * size / ATLAS_TILE);
+    const sourceY = Math.floor(y * size / ATLAS_TILE);
+    const color = definition.sprite.pixels[sourceY * size + sourceX];
+    if (!color) continue;
+    const offset = (y * ATLAS_TILE + x) * 4;
+    image.data[offset] = parseInt(color.slice(1, 3), 16);
+    image.data[offset + 1] = parseInt(color.slice(3, 5), 16);
+    image.data[offset + 2] = parseInt(color.slice(5, 7), 16);
+    image.data[offset + 3] = 255;
+  }
+  ctx.putImageData(image, col * ATLAS_TILE, row * ATLAS_TILE);
+  atlasTexture.needsUpdate = true;
+}
+function clearCustomCaches(id) {
+  iconCache.delete(id);
+  blockColorCache.delete(id);
+  const material = dropMatCache.get(id);
+  if (material) {
+    if (material.map) material.map.dispose();
+    material.dispose();
+    dropMatCache.delete(id);
+  }
+}
+function assertCustomDefinitionAvailable(definition) {
+  const id = definition.registry.id;
+  const existingDefinition = customDefinitionsById.get(id);
+  if (BLOCK_TYPES[id] && !existingDefinition) {
+    throw new Error('Registry ID ' + id + ' is already used by ' + BLOCK_TYPES[id].name + '. Choose a free ID in the sprite studio.');
+  }
+  const tile = definition.texture.atlasIndex;
+  for (const [registeredId, tileInfo] of Object.entries(BLOCK_TILES)) {
+    if (Number(registeredId) === id || customDefinitionsById.has(Number(registeredId))) continue;
+    if ([tileInfo.all, tileInfo.top, tileInfo.side, tileInfo.bottom].includes(tile)) {
+      throw new Error('Atlas tile ' + tile + ' is already used. Choose another unused custom tile.');
+    }
+  }
+  if ([...customDefinitionsById.entries()].some(([registeredId, entry]) =>
+    registeredId !== id && entry.texture.atlasIndex === tile)) {
+    throw new Error('Atlas tile ' + tile + ' is already assigned to another imported definition.');
+  }
+}
+function registerCustomDefinition(definition, modelTemplate) {
+  assertCustomDefinitionAvailable(definition);
+  const id = definition.registry.id;
+  const tile = definition.texture.atlasIndex;
+  const existingDefinition = customDefinitionsById.get(id);
+  if (existingDefinition && existingDefinition.recipe && existingDefinition.recipe.type === 'smelting') {
+    const oldInput = existingDefinition.recipe.input.id;
+    if (SMELT_RECIPES[oldInput] && SMELT_RECIPES[oldInput].id === id) delete SMELT_RECIPES[oldInput];
+    customSmeltTimes.delete(oldInput);
+  }
+  RECIPES.splice(0, RECIPES.length, ...RECIPES.filter(recipe => recipe.result.id !== id));
+  const isTool = definition.kind === 'tool';
+  if (isTool) {
+    BLOCK_TYPES[id] = {
+      name: definition.name, isItem: true, isTool: true, tool: definition.base.toolType,
+      speed: definition.base.miningSpeedMultiplier, maxStack: definition.base.maxStack,
+      damage: definition.base.damage, attackCooldown: definition.base.cooldownSeconds,
+      reach: definition.base.reachBlocks, harvestLevel: definition.base.harvestLevel,
+      customDefinition: true,
+    };
+    DURABILITY[id] = definition.base.durabilityUses;
+    delete BLOCK_HARDNESS[id];
+    customBlockDefinitions.delete(id);
+  } else {
+    BLOCK_TYPES[id] = {
+      name: definition.name, isItem: false, maxStack: definition.base.maxStack,
+      solid: definition.base.solid, transparent: definition.base.transparent,
+      light: definition.base.light, customDefinition: true,
+    };
+    BLOCK_HARDNESS[id] = definition.base.unbreakable ? Infinity : definition.base.hardnessSeconds;
+    delete DURABILITY[id];
+    customBlockDefinitions.set(id, definition.base);
+  }
+  BLOCK_TILES[id] = { all: tile, isItem: isTool };
+  if (definition.recipe) {
+    if (definition.recipe.type === 'smelting') {
+      SMELT_RECIPES[definition.recipe.input.id] = definition.recipe.result;
+      customSmeltTimes.set(definition.recipe.input.id, definition.recipe.smeltingSeconds);
+    } else {
+      RECIPES.push({
+        type: definition.recipe.type,
+        station: definition.recipe.station,
+        pattern: definition.recipe.pattern,
+        ingredients: definition.recipe.ingredients,
+        result: definition.recipe.result,
+      });
+    }
+  }
+  customDefinitionsById.set(id, definition);
+  if (modelTemplate) customModelTemplates.set(id, modelTemplate);
+  else customModelTemplates.delete(id);
+  paintCustomAtlasTile(definition);
+  clearCustomCaches(id);
+  handCurrentId = -1;
+  updateHandItem();
+  renderHotbar();
+  if (inventoryOpen) renderInventory();
+  const loadedChunks = [...chunkMeshes.keys()].map(key => key.split(',').map(Number));
+  for (const [cx, cz] of loadedChunks) buildChunk(cx, cz);
+}
+async function loadStoredCustomDefinitions() {
+  if (idbAvailable) {
+    try {
+      const db = await getDB();
+      const stored = await new Promise((resolve, reject) => {
+        const request = db.transaction('worlds', 'readonly').objectStore('worlds').get(CUSTOM_DEFINITIONS_KEY);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      if (Array.isArray(stored)) return stored;
+    } catch (error) {
+      console.warn('Could not read imported definitions from IndexedDB:', error);
+    }
+  }
+  try {
+    const stored = localStorage.getItem(CUSTOM_DEFINITIONS_KEY);
+    const definitions = stored ? JSON.parse(stored) : [];
+    if (!Array.isArray(definitions)) throw new Error('Stored imported definitions are not a list.');
+    return definitions;
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error('Stored imported definitions contain invalid JSON.');
+    if (error && error.name === 'SecurityError') throw new Error('Browser storage is blocked; imported definitions cannot be read.');
+    throw error;
+  }
+}
+async function saveCustomDefinitions(definitions) {
+  let idbError = null;
+  if (idbAvailable) {
+    try {
+      const db = await getDB();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction('worlds', 'readwrite');
+        tx.objectStore('worlds').put(definitions, CUSTOM_DEFINITIONS_KEY);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('IndexedDB transaction was aborted.'));
+      });
+      return;
+    } catch (error) {
+      idbError = error;
+      console.warn('Could not save imported definitions to IndexedDB:', error);
+    }
+  }
+  try {
+    localStorage.setItem(CUSTOM_DEFINITIONS_KEY, JSON.stringify(definitions));
+    if (idbError) toast('Definition imported using local storage; browser database save failed.', false);
+  } catch (error) {
+    throw new Error('Could not save imported definition' +
+      (idbError ? ': IndexedDB: ' + idbError.message + '; local storage: ' + error.message : ': ' + error.message));
+  }
+}
+async function prepareCustomDefinition(source) {
+  const definition = validateCustomDefinition(source);
+  const modelTemplate = await makeCustomModelTemplate(definition.mesh);
+  return { definition, modelTemplate };
+}
+async function restoreCustomDefinitions() {
+  let stored;
+  try {
+    stored = await loadStoredCustomDefinitions();
+  } catch (error) {
+    console.error('Imported item definitions could not be restored:', error);
+    return;
+  }
+  for (const source of stored) {
+    try {
+      const prepared = await prepareCustomDefinition(source);
+      registerCustomDefinition(prepared.definition, prepared.modelTemplate);
+    } catch (error) {
+      console.error('Could not restore an imported item definition:', error);
+    }
+  }
+}
+await restoreCustomDefinitions();
+
 function matchRecipe() {
   const N = craftGridSize;
   const items = craftGrid.map(c => c ? c.id : 0);
   for (const recipe of RECIPES) {
+    if (recipe.station === 'inventory' && N !== 2) continue;
+    if (recipe.station === 'crafting_table' && N !== 3) continue;
     if (recipe.type === 'shapeless') {
       const counts = {}; let nonEmpty = 0;
       for (const id of items) if (id) { counts[id] = (counts[id] || 0) + 1; nonEmpty++; }
@@ -4519,7 +5028,7 @@ function updateFurnaces(dt) {
       }
       if (f.burnTime > 0) {
         f.cookTime += dt;
-        if (f.cookTime >= SMELT_TIME) {
+        if (f.cookTime >= (customSmeltTimes.get(f.input.id) ?? SMELT_TIME)) {
           const r = SMELT_RECIPES[f.input.id];
           if (f.output && f.output.id === r.id) f.output.count += r.count;
           else f.output = { id: r.id, count: r.count };
@@ -4704,10 +5213,14 @@ function breakBlock() {
   const id = getBlock(target.x, target.y, target.z);
   if (id === AIR || id === BEDROCK || isFluid(id)) return;
   const bx = target.x, by = target.y, bz = target.z;
+  const customBlock = customBlockDefinitions.get(id);
   setBlock(bx, by, bz, AIR);
   rebuildAround(bx, by, bz);
   wakeFluid(bx, by, bz);
-  if (gameMode === 'survival') spawnDrop(bx + 0.5, by + 0.5, bz + 0.5, getOreDrop(id), 1);
+  if (gameMode === 'survival') {
+    const dropCount = customBlock ? customBlock.dropCount : 1;
+    if (dropCount > 0) spawnDrop(bx + 0.5, by + 0.5, bz + 0.5, getOreDrop(id), dropCount);
+  }
   spawnBreakParticles(bx, by, bz, id);
   if (isPlantBlock(id)) playSFX('plantBreak');
   else playSFX('break');
@@ -4749,6 +5262,8 @@ function placeBlock() {
     return;
   }
 
+
+
   if (def && def.isItem) return;
   if (gameMode === 'survival' && (!stack.count || stack.count <= 0)) return;
   const x = target.x + target.nx, y = target.y + target.ny, z = target.z + target.nz;
@@ -4779,6 +5294,8 @@ function placeBlock() {
 function inBounds2(x, y, z) {
   return x >= 0 && x < WORLD_W && y >= 0 && y < MAX_Y && z >= 0 && z < WORLD_D;
 }
+
+
 
 /* Day/night */
 const _dayTop = new THREE.Color(0x3d78c4), _dayMid = new THREE.Color(0x8fbcd4), _dayBottom = new THREE.Color(0xd8e8ef);
@@ -5191,8 +5708,13 @@ function leaveToTitle(msg, isErr) {
 /* ---------- PvP helpers (the Go server is authoritative) ---------- */
 function requestPvpAttack(targetId) {
   if (!pvpEnabled || !NET.role || pvpAttackCooldown > 0 || !Number.isInteger(targetId)) return;
-  pvpAttackCooldown = 0.55;
-  if (NET.hostConn && NET.hostConn.open) NET.hostConn.send({ t: 'pvp-attack', id: targetId });
+  const weaponId = hotbar[selected] ? hotbar[selected].id : 0;
+  const weapon = BLOCK_TYPES[weaponId];
+  const custom = weapon && weapon.customDefinition && weapon.isTool;
+  pvpAttackCooldown = weapon && weapon.customDefinition ? Math.max(0.1, weapon.attackCooldown) : 0.55;
+  const msg = { t: 'pvp-attack', id: targetId };
+  if (custom) { msg.dmg = weapon.damage; msg.reach = weapon.reach; msg.cd = weapon.attackCooldown; }
+  if (NET.hostConn && NET.hostConn.open) NET.hostConn.send(msg);
 }
 function pvpRespawnPoint() {
   const x = Math.floor(SPAWN.x), z = Math.floor(SPAWN.z);

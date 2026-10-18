@@ -81,6 +81,9 @@ type inMsg struct {
 	Pitch float64 `json:"pitch"`
 	ID    float64 `json:"id"`
 	M     string  `json:"m"`
+	Dmg   float64 `json:"dmg"`   // custom weapon stats (optional)
+	Reach float64 `json:"reach"`
+	Cd    float64 `json:"cd"`
 }
 
 type saveFile struct {
@@ -345,7 +348,7 @@ func (s *server) handle(p *player, m *inMsg) {
 		}
 	case "pvp-attack":
 		if isInt(m.ID) {
-			s.pvpAttack(p, int(m.ID))
+			s.pvpAttack(p, int(m.ID), m)
 		}
 	case "pvp-dead":
 		if s.pvp {
@@ -380,7 +383,8 @@ func (s *server) onBlock(p *player, m *inMsg) {
 	if x < 0 || x >= worldW || z < 0 || z >= worldD || y < 1 || y >= maxY { // y=0 is bedrock
 		return
 	}
-	if id < 0 || id > 29 || id == 9 { // 9 = bedrock; 100+ are items
+	// 9 = bedrock, 100-118 = built-in items; chunk data is one byte, so blocks are 0-255
+	if id < 0 || id > 255 || id == 9 || (id >= 100 && id <= 118) {
 		return
 	}
 	idx := voxelIndex(x, y, z)
@@ -449,19 +453,26 @@ func (s *server) command(p *player, text string) {
 
 // ---------------------------------------------------------------- PvP
 
-func (s *server) pvpAttack(a *player, targetID int) {
+func clampF(v, lo, hi, def float64) float64 {
+	if v == 0 || math.IsNaN(v) {
+		return def
+	}
+	return math.Max(lo, math.Min(hi, v))
+}
+
+func (s *server) pvpAttack(a *player, targetID int, m *inMsg) {
 	if !s.pvp || a.dead || targetID == a.id {
 		return
 	}
 	t := s.players[targetID]
 	now := time.Now()
-	if t == nil || t.dead || now.Sub(a.lastAttack) < 500*time.Millisecond {
+	if t == nil || t.dead || now.Sub(a.lastAttack) < time.Duration(clampF(m.Cd, 0.1, 5, 0.5)*float64(time.Second)) {
 		return
 	}
 	cp := math.Cos(a.pitch)
 	dx, dy, dz := -math.Sin(a.yaw)*cp, math.Sin(a.pitch), -math.Cos(a.yaw)*cp
 	hit := rayAABB(a.x, a.y+1.5, a.z, dx, dy, dz,
-		[3]float64{t.x - 0.3, t.y, t.z - 0.3}, [3]float64{t.x + 0.3, t.y + 1.8, t.z + 0.3}, pvpReach)
+		[3]float64{t.x - 0.3, t.y, t.z - 0.3}, [3]float64{t.x + 0.3, t.y + 1.8, t.z + 0.3}, clampF(m.Reach, 0.5, 8, pvpReach))
 	if hit < 0 {
 		return
 	}
@@ -472,7 +483,8 @@ func (s *server) pvpAttack(a *player, targetID int) {
 		l = 1
 	}
 	kx, kz = kx/l, kz/l
-	t.health -= pvpDamage
+	damage := int(math.Round(clampF(m.Dmg, 1, maxHealth, pvpDamage)))
+	t.health -= damage
 	if t.health < 0 {
 		t.health = 0
 	}
@@ -481,7 +493,7 @@ func (s *server) pvpAttack(a *player, targetID int) {
 		return M{"t": "pvp-health", "id": t.id, "amount": amount, "by": a.name,
 			"health": t.health, "dead": t.dead, "knockX": kx, "knockZ": kz}
 	}
-	s.sendTo(t, upd(pvpDamage))
+	s.sendTo(t, upd(damage))
 	s.broadcast(upd(0), t)
 }
 
