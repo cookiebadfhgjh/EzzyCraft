@@ -166,24 +166,34 @@
     <label for="mechanics-notes">Behavior notes (informational)
       <textarea id="mechanics-notes" spellcheck="false" placeholder="Optional explanation for players or pack maintainers."></textarea>
     </label>
-    <label for="mechanics">Unique behavior module
-      <textarea id="mechanics" spellcheck="false" placeholder="({&#10;  onUse(api, event) {&#10;    api.effects.playSound('pickup');&#10;  },&#10;  onHit(api, event) {&#10;    return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };&#10;  }&#10;})"></textarea>
+    <label for="mechanics">Pack behavior key
+      <input id="mechanics" type="text" placeholder="example: magicSword">
     </label>
-    <p class="hint">Unique behavior is the item's own JavaScript hook module. Hooks include onUse, onHit, onBlockBreak, onBlockPlace, and onTick. They receive the event, player, nearby players, and ray-trace context.</p>
-    <h3>Shared JavaScript services</h3>
-    <label for="feature-script">Reusable services object (optional)
-      <textarea id="feature-script" spellcheck="false" placeholder="({&#10;  burst(api, event, count = 3) {&#10;    api.effects.playSound('pickup');&#10;    return count;&#10;  },&#10;  shoot(api, event, speed = 12) {&#10;    return api.projectiles.launch({ speed });&#10;  }&#10;})"></textarea>
+    <p class="hint">The key selects this entry's behavior from the pack-wide JavaScript module. Item behavior code is authored once in the pack module, not embedded in each item definition.</p>
+    <h3>Pack-wide JavaScript module</h3>
+    <label for="pack-script">JavaScript module
+      <textarea id="pack-script" spellcheck="false" placeholder="({&#10;  services: {&#10;    playSound(game, api, event) { api.effects.playSound('pickup'); }&#10;  },&#10;  items: {&#10;    magicSword: { onUse(game, api, event) { api.services.playSound(); } }&#10;  },&#10;  features: {&#10;    chatListener(game, api, event) { if (event.message === 'hello') api.effects.playSound('pickup'); }&#10;  }&#10;})"></textarea>
     </label>
-    <p class="hint">Unique hooks call a service with api.services.burst(count). The active hook's API and event are passed to the service automatically. Services are separated from item behavior so one helper can be reused by every hook on that item. Scripts require player approval; game-changing actions remain validated by the game/server.</p>
+    <p class="hint">One module is shared by the whole pack: <code>services</code> are reusable code functions, <code>items</code> holds behavior keyed by the Pack behavior key, and <code>features</code> holds independent game-wide hooks. Built-in <code>game.services.rayTrace(maxDistance, maxHits)</code> returns ordered block and player hits and is available to all code, but is not editable.</p>
     <section class="mesh-box" aria-label="Definition pack">
-      <h3 style="margin-top:0">Multi-item pack <span id="pack-count" class="muted">0 items</span></h3>
-      <p class="hint">Add the current definition to the pack, then draw and configure the next item. IDs and texture tiles are assigned automatically after each addition.</p>
+      <h3 style="margin-top:0">Pack entries <span id="pack-count" class="muted">0 entries</span></h3>
+      <label for="pack-name">Pack name<input id="pack-name" value="Co-op item pack"></label>
+      <label for="pack-id">Shared pack ID<input id="pack-id" value="coop_item_pack"></label>
+      <p class="hint">A pack can contain items, blocks, shared JavaScript services, and independent features such as chat listeners. Add the current item/block, or add a service/feature reference to the pack module.</p>
       <div id="pack-items" class="muted">No items in the pack.</div>
+      <div class="field-grid">
+        <label for="service-name">JavaScript service name<input id="service-name" placeholder="playSound"></label>
+        <button type="button" id="pack-add-service">Add service entry</button>
+        <label for="feature-name">Feature name<input id="feature-name" placeholder="greeting"></label>
+        <label for="feature-event">Feature event<select id="feature-event"><option value="onChat">Chat message</option><option value="onTick">Game tick</option><option value="onPlayerJoin">Player joins</option><option value="onPlayerLeave">Player leaves</option></select></label>
+        <label for="feature-handler">Feature handler key<input id="feature-handler" placeholder="chatListener"></label>
+        <button type="button" id="pack-add-feature">Add feature entry</button>
+      </div>
       <div class="actions">
-        <button type="button" id="pack-add">Add current item to pack</button>
+        <button type="button" id="pack-add">Add current item/block</button>
         <button type="button" id="pack-remove">Remove last</button>
         <button type="button" id="pack-clear">Clear pack</button>
-          <button type="button" id="download-pack" class="primary">Export multi-item pack JSON</button>
+          <button type="button" id="download-pack" class="primary">Export pack JSON</button>
       </div>
     </section>
     <div class="actions">
@@ -218,6 +228,7 @@
   let modelViewerReady = null;
   let lastKind = $('kind').value;
   const packDefinitions = [];
+  const packScriptEntries = [];
   const MAX_MESH_BYTES = 20 * 1024 * 1024;
 
   function pushHistory() {
@@ -518,6 +529,9 @@
   function makeDefinition() {
     const kind = $('kind').value;
     const mechanics = $('mechanics').value;
+    if (mechanics && !/^[a-zA-Z_$][\w$]*$/.test(mechanics)) {
+      throw new Error('Pack behavior key must be a valid JavaScript identifier.');
+    }
     const id = numericId($('registry-id').value, 'Registry ID');
     const atlasIndex = numericId($('atlas-index').value, 'Atlas tile', true);
     if (atlasIndex < 54 || atlasIndex > 127) throw new Error('Choose an unused custom atlas tile from 54 to 127.');
@@ -548,7 +562,7 @@
       mechanics: {
         unique: mechanics,
         description: $('mechanics-notes').value.trim(),
-        uniqueRuntime: 'coop1.10.javascript-feature.v2',
+        uniqueRuntime: mechanics ? 'coop1.10.pack-hook-ref.v1' : undefined,
       },
       recipe,
     };
@@ -593,15 +607,6 @@
               : common.base.hardnessSeconds)),
         withoutEffectiveToolSeconds: common.base.unbreakable ? null :
           (common.base.hardnessSeconds <= 0 ? 0.001 : common.base.hardnessSeconds),
-      };
-    }
-    const featureSource = $('feature-script').value.trim();
-    if (featureSource) {
-      if (featureSource.length > 262144) throw new Error('Shared JavaScript services must be 256 KB or smaller.');
-      common.features = {
-        runtime: 'coop1.10.javascript-services.v1',
-        capabilities: ['combat', 'inventory', 'world', 'player', 'effects'],
-        services: featureSource,
       };
     }
     if (mesh) {
@@ -745,11 +750,16 @@
     throw new Error('The pack has used all available custom texture tiles (54–127).');
   }
   function renderPack() {
-    $('pack-count').textContent = packDefinitions.length + (packDefinitions.length === 1 ? ' item' : ' items');
-    $('pack-items').textContent = packDefinitions.length
-      ? packDefinitions.map(definition => definition.name + ' (ID ' + definition.registry.id +
-        ', tile ' + definition.texture.atlasIndex + ')').join(' · ')
-      : 'No items in the pack.';
+    const entries = [
+      ...packDefinitions.map(definition => ({
+        type: definition.kind, name: definition.name, detail: 'ID ' + definition.registry.id,
+      })),
+      ...packScriptEntries,
+    ];
+    $('pack-count').textContent = entries.length + (entries.length === 1 ? ' entry' : ' entries');
+    $('pack-items').textContent = entries.length
+      ? entries.map(entry => entry.type + ': ' + entry.name + (entry.detail ? ' (' + entry.detail + ')' : '')).join(' · ')
+      : 'No entries in the pack.';
   }
   function clearForNextPackItem() {
     pushHistory();
@@ -760,7 +770,6 @@
     $('registry-key').dataset.edited = '';
     $('atlas-index').value = String(nextFreeTile());
     $('mechanics').value = '';
-    $('feature-script').value = '';
     $('recipe-type').value = 'none';
     $('recipe-ingredients').value = '';
     $('shaped-recipe').classList.add('hidden');
@@ -792,6 +801,39 @@
       $('message').textContent = 'Could not add item to pack: ' + error.message;
     }
   });
+  $('pack-add-service').addEventListener('click', () => {
+    const name = $('service-name').value.trim();
+    if (!/^[a-zA-Z_$][\w$]*$/.test(name)) {
+      $('message').textContent = 'Service name must be a valid JavaScript identifier.';
+      return;
+    }
+    if (packScriptEntries.some(entry => entry.type === 'service' && entry.name === name)) {
+      $('message').textContent = 'That JavaScript service is already in the pack.';
+      return;
+    }
+    packScriptEntries.push({ type: 'service', name });
+    $('service-name').value = '';
+    renderPack();
+    $('message').textContent = 'JavaScript service reference added. Define it in the pack-wide module under services.';
+  });
+  $('pack-add-feature').addEventListener('click', () => {
+    const name = $('feature-name').value.trim();
+    const handler = $('feature-handler').value.trim();
+    const event = $('feature-event').value;
+    if (!/^[a-zA-Z_$][\w$]*$/.test(name) || !/^[a-zA-Z_$][\w$]*$/.test(handler)) {
+      $('message').textContent = 'Feature name and handler key must be valid JavaScript identifiers.';
+      return;
+    }
+    if (packScriptEntries.some(entry => entry.type === 'feature' && entry.name === name)) {
+      $('message').textContent = 'That feature name is already in the pack.';
+      return;
+    }
+    packScriptEntries.push({ type: 'feature', name, event, handler });
+    $('feature-name').value = '';
+    $('feature-handler').value = '';
+    renderPack();
+    $('message').textContent = 'Independent feature entry added. Define its handler in the pack-wide module under features.';
+  });
   $('pack-remove').addEventListener('click', () => {
     if (!packDefinitions.length) return;
     const removed = packDefinitions.pop();
@@ -801,20 +843,31 @@
   });
   $('pack-clear').addEventListener('click', () => {
     packDefinitions.length = 0;
+    packScriptEntries.length = 0;
     renderPack();
     $('message').textContent = 'Pack cleared.';
     updateDefinitionPreview();
   });
   $('download-pack').addEventListener('click', () => {
     try {
-      if (!packDefinitions.length) throw new Error('Add at least one definition to the pack first.');
+      const javascript = $('pack-script').value.trim();
+      if (!packDefinitions.length && !packScriptEntries.length) throw new Error('Add at least one entry to the pack first.');
+      if (javascript.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
+      if (javascript) new Function('return (' + javascript + ');');
+      const id = $('pack-id').value.trim();
+      if (!/^[a-z][a-z0-9_-]{0,63}$/.test(id)) throw new Error('Pack ID must start with a lowercase letter and contain lowercase letters, digits, underscores, or hyphens.');
       const pack = {
-        schema: 'coop1.10.item-block-pack.v1',
-        name: 'Co-op item pack',
-        definitions: packDefinitions,
+        schema: 'coop1.10.item-block-pack.v2',
+        id,
+        name: $('pack-name').value.trim() || 'Co-op item pack',
+        entries: [
+          ...packDefinitions.map(definition => ({ type: definition.kind === 'tool' ? 'item' : 'block', definition })),
+          ...packScriptEntries,
+        ],
+        javascript: { runtime: 'coop1.10.pack-javascript.v1', source: javascript },
       };
       downloadBlob(new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json;charset=utf-8' }), 'coop-item-pack.json');
-      $('message').textContent = packDefinitions.length + ' definitions exported as a pack.';
+      $('message').textContent = pack.entries.length + ' entries exported with one pack-wide JavaScript module.';
     } catch (error) {
       $('message').textContent = 'Pack export failed: ' + error.message;
     }
@@ -881,13 +934,25 @@
       const oldFeatureHooks = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
         ? definition.features.source || ''
         : '';
+      const priorUniqueCode = definition.mechanics &&
+        definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+        ? definition.mechanics.unique || ''
+        : oldFeatureHooks;
       $('mechanics-notes').value = definition.mechanics &&
         (definition.mechanics.description || (definition.mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2'
           ? definition.mechanics.unique
           : '')) || '';
-      $('mechanics').value = definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+      $('mechanics').value = definition.mechanics &&
+        definition.mechanics.uniqueRuntime === 'coop1.10.pack-hook-ref.v1'
         ? definition.mechanics.unique || ''
-        : oldFeatureHooks;
+        : priorUniqueCode ? 'legacy' : '';
+      const priorServices = definition.features && definition.features.runtime === 'coop1.10.javascript-services.v1'
+        ? definition.features.services || ''
+        : '';
+      $('pack-script').value = priorUniqueCode || priorServices
+        ? '({items:' + (priorUniqueCode ? '{legacy:(' + priorUniqueCode + ')}' : '{}') +
+          ',services:' + (priorServices || '{}') + ',features:{}})'
+        : '';
       if (definition.kind === 'tool') {
         const b = definition.base || {};
         $('damage').value = String(b.damage ?? 4);
@@ -954,10 +1019,6 @@
       }
       render();
       $('message').textContent = 'Definition imported into the editor.';
-      $('feature-script').value = definition.features &&
-        (definition.features.runtime === 'coop1.10.javascript-services.v1' || definition.features.runtime === 'coop1.10.javascript-feature.v1')
-        ? definition.features.services || ''
-        : '';
       renderPack();
       updateDefinitionPreview();
     } catch (error) {

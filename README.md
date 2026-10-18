@@ -24,55 +24,59 @@ Type these in online chat (`T`). Only operators can change server settings or us
 - `/op <player>`, `/deop <player>`
 - `/tp <player>` (teleports you to that player)
 
-Shared definition JSON files are stored in `server_data\definitions` next to the server's working directory. The server creates this folder automatically and sends its definitions to connected players. Use HTTPS when exposing the server publicly so the operator code is protected in transit.
+Shared definitions are stored in `server_data\definitions`, and complete packs (including their one shared JavaScript module) are stored in `server_data\packs`, next to the server's working directory. The server creates these folders automatically and sends their contents to connected players. Use HTTPS when exposing the server publicly so the operator code is protected in transit.
 
 ## Co-op Sprite Studio
 
-Open `Other\coop-sprite-studio.html` to create custom items and blocks. The editor includes combat and mining stats, including a per-tool knockback multiplier, block drops and light, recipes, and optional GLB models. Add multiple definitions to the pack panel and export one multi-item pack JSON file; import that file with the operator-only in-game definition importer.
+Open `Other\coop-sprite-studio.html` to create custom items and blocks. The editor includes combat and mining stats, including a per-tool knockback multiplier, block drops and light, recipes, and optional GLB models. A pack can contain items, blocks, JavaScript services, and independent game features. Export a pack JSON file and import it with the operator-only in-game definition importer.
 
-JavaScript is split into two editors. **Unique behavior module** contains this item's hooks; **Shared JavaScript services** contains reusable helper functions available to all of those hooks through `api.services`. For example:
+Each pack has one JavaScript module shared by all its entries. An item's **Pack behavior key** selects its hook object under `items`; JavaScript service entries reference functions under `services`; independent feature entries reference callbacks under `features`:
 
 ```js
 ({
-  onUse(api, event) {
-    return api.services.playSoundAndLaunch();
+  services: {
+    playSoundAndLaunch(game, api, event) {
+      api.effects.playSound('pickup');
+      return api.projectiles.launch({ speed: 18, lifetime: 4 });
+    }
   },
-  onHit(api, event) {
-    const victim = event.attackedPlayer;
-    if (victim) api.effects.playSound('hurt');
-    return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };
+  items: {
+    magicSword: {
+      onUse(game, api, event) {
+        const hits = game.services.rayTrace(12, 5);
+        if (hits.some(hit => hit.isPlayer)) api.effects.playSound('pickup');
+        return api.services.playSoundAndLaunch();
+      },
+      onHit(game, api, event) {
+        const victim = event.attackedPlayer;
+        if (victim) api.effects.playSound('hurt');
+        return { damageMultiplier: 1.5, knockbackMultiplier: 1.2 };
+      }
+    },
+    magicBlock: {
+      onBlockUse(game, api, event) {
+        console.log(event.clickedBy.name + ' used this block');
+      }
+    }
   },
-  onBlockUse(api, event) {
-    console.log(event.clickedBy.name + ' used this block');
-  },
-  onProjectileHit(api, event) {
-    if (event.hit.type === 'block') api.effects.particle('break', event.hit.position.x, event.hit.position.y, event.hit.position.z);
-  },
-  onTick(api, event) {
-    if (api.world.time > 18) api.effects.playSound('pickup');
+  features: {
+    greeting(game, api, event) {
+      if (event.message === 'hello') api.effects.playSound('pickup');
+    }
   }
 })
 ```
 
-The shared-services editor can define named functions, for example:
+Use `onUse`, `onHit`, `onBlockUse`, `onBlockBreak`, `onBlockPlace`, `onProjectileHit`, and `onTick` on item behavior objects. Independent feature entries can listen for `onChat`, `onTick`, `onPlayerJoin`, or `onPlayerLeave`. Chat events include `event.sender` and `event.message`; block-use events include `event.clickedBy`; hit events include `event.attackedPlayer`. Event data also includes player snapshots.
 
-```js
-({
-  playSoundAndLaunch(api, event) {
-    api.effects.playSound('pickup');
-    return api.projectiles.launch({ speed: 18, lifetime: 4 });
-  }
-})
-```
+The immutable, game-wide `game.services` API is supplied by the runtime and is not pack-editable. `game.services.rayTrace(maxDistance, maxHits)` returns a distance-sorted list of hits from the current view, including `type`, `isBlock`, `isPlayer`, `id`, `distance`, `position`, and block/player details. It can report multiple blocks and players along the ray. Packs can also use `api.services` for their own reusable JavaScript functions.
 
-Call it from any unique hook with `api.services.playSoundAndLaunch()`. The active hook's API and event are automatically passed as the first two service arguments, followed by any arguments supplied to the service call. Unique hooks include `onUse`, `onHit`, `onBlockUse`, `onBlockBreak`, `onBlockPlace`, `onProjectileHit`, and `onTick`. Block-use events include `event.clickedBy`; hit events include `event.attackedPlayer`. Hooks also receive snapshots through `event.players`, and `api.players.list()` / `api.players.get(id)`.
+Hooks receive `(game, api, event)`; pack services receive these arguments followed by any explicit service arguments. The action API includes `api.inventory.giveItem(id, count)`, `api.world.setBlock(x, y, z, id)`, `api.world.spawnDrop(x, y, z, id, count)`, `api.world.setTime(hours)`, `api.world.time`, `api.projectiles.launch({ speed, lifetime, direction, origin, damage })`, `api.player.heal(amount)`, `api.player.damage(amount)`, `api.player.addVelocity(x, y, z)`, `api.combat.modifyHit(damageMultiplier, knockbackMultiplier)`, `api.effects.playSound(name)`, and `api.effects.particle(name, x, y, z)`. `onHit` may return damage and knockback multipliers. Projectile damage is event metadata; online player damage remains server-authoritative. Changing shared server time requires operator permission.
 
-Available APIs include `api.inventory.giveItem(id, count)`, `api.world.setBlock(x, y, z, id)`, `api.world.spawnDrop(x, y, z, id, count)`, `api.world.setTime(hours)`, `api.world.time`, `api.world.raycast(maxDistance)`, `api.projectiles.launch({ speed, lifetime, direction, origin, damage })`, `api.player.heal(amount)`, `api.player.damage(amount)`, `api.player.addVelocity(x, y, z)`, `api.combat.modifyHit(damageMultiplier, knockbackMultiplier)`, `api.effects.playSound(name)`, and `api.effects.particle(name, x, y, z)`. Raycasts report the nearest aimed-at block or player; projectiles trace blocks and players and invoke `onProjectileHit` on impact. The projectile's optional `damage` value is event metadata; it does not directly damage other players. `onHit` may return damage and knockback multipliers. Time changes in a connected server require operator permission.
-
-Each player must approve the unique code and services before they run. They execute in an isolated worker without access to the game page or network. The runtime allows larger modules and more actions than before, while retaining a two-second hook timeout and checks on world, inventory, health, and server-authoritative operations. Shared server definitions can therefore distribute code, but each player still decides whether to execute it.
+Pack code starts without a per-player approval prompt. It runs in an isolated worker without game-page or network access, with a two-second hook timeout and validated game/server actions. Keep packs under trusted server-operator control.
 
 ## Render
 
 Do not put the operator code in the source code or in a public Render start command. In the Render dashboard, open your service's **Environment** settings and add a secret environment variable named `EZZYCRAFT_OP_CODE`. Set its value to a private code, save the change, and redeploy the service. The in-game **Options...** screen must be opened from that Render server's URL; enter the same value to unlock the import button.
 
-The server also uses Render's `PORT` environment variable for its listen port. To keep imported definition files across redeploys, attach a persistent disk and set `-definitions-dir` to a folder on that disk using the service's start command.
+The server also uses Render's `PORT` environment variable for its listen port. To keep imported definitions and packs across redeploys, attach a persistent disk and set `-definitions-dir` and `-packs-dir` to folders on that disk using the service's start command.

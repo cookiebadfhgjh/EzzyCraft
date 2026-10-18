@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,6 +124,7 @@ type server struct {
 	dirty          bool
 	savePath       string
 	definitionsDir string
+	packsDir       string
 	operatorCode   string
 	opAttempts     map[string]operatorAttempt
 }
@@ -131,6 +133,8 @@ type operatorAttempt struct {
 	failures int
 	expires  time.Time
 }
+
+var sharedPackIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -1147,6 +1151,109 @@ func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handlePacks(w http.ResponseWriter, r *http.Request) {
+	setAPICORS(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		entries, err := os.ReadDir(s.packsDir)
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, "Could not read shared server packs.")
+			log.Println("could not read shared packs:", err)
+			return
+		}
+		packs := make([]json.RawMessage, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(s.packsDir, entry.Name()))
+			if err != nil || !json.Valid(data) {
+				writeAPIError(w, http.StatusInternalServerError, "A shared server pack file could not be read.")
+				log.Printf("could not read shared pack %q: %v", entry.Name(), err)
+				return
+			}
+			packs = append(packs, json.RawMessage(data))
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		if err := json.NewEncoder(w).Encode(packs); err != nil {
+			log.Println("could not return shared packs:", err)
+		}
+	case http.MethodPost:
+		if s.operatorCode == "" {
+			writeAPIError(w, http.StatusServiceUnavailable, "Server operator access is not configured.")
+			return
+		}
+		authorized, blocked := s.checkOperatorCode(r, r.Header.Get("X-Server-Op-Code"))
+		if blocked {
+			writeAPIError(w, http.StatusTooManyRequests, "Too many incorrect operator-code attempts. Try again later.")
+			return
+		}
+		if !authorized {
+			writeAPIError(w, http.StatusUnauthorized, "Server operator access is required.")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "Pack file is too large or could not be read.")
+			return
+		}
+		var metadata struct {
+			Schema     string            `json:"schema"`
+			ID         string            `json:"id"`
+			Entries    []json.RawMessage `json:"entries"`
+			JavaScript struct {
+				Runtime string `json:"runtime"`
+				Source  string `json:"source"`
+			} `json:"javascript"`
+		}
+		if err := json.Unmarshal(data, &metadata); err != nil || !json.Valid(data) ||
+			metadata.Schema != "coop1.10.item-block-pack.v2" ||
+			len(metadata.ID) < 1 || len(metadata.ID) > 64 ||
+			!sharedPackIDPattern.MatchString(metadata.ID) ||
+			len(metadata.Entries) < 1 || len(metadata.Entries) > 256 ||
+			metadata.JavaScript.Runtime != "coop1.10.pack-javascript.v1" ||
+			len(metadata.JavaScript.Source) > 1<<20 {
+			writeAPIError(w, http.StatusBadRequest, "Invalid shared item pack JSON.")
+			return
+		}
+		path := filepath.Join(s.packsDir, metadata.ID+".json")
+		s.mu.Lock()
+		tmp, err := os.CreateTemp(s.packsDir, ".pack-*.tmp")
+		if err != nil {
+			s.mu.Unlock()
+			writeAPIError(w, http.StatusInternalServerError, "Could not save the shared pack.")
+			log.Println("could not save shared pack:", err)
+			return
+		}
+		tmpPath := tmp.Name()
+		defer os.Remove(tmpPath)
+		if _, err = tmp.Write(data); err == nil {
+			err = tmp.Close()
+		} else {
+			_ = tmp.Close()
+		}
+		if err == nil {
+			err = os.Rename(tmpPath, path)
+		}
+		if err != nil {
+			s.mu.Unlock()
+			writeAPIError(w, http.StatusInternalServerError, "Could not save the shared pack.")
+			log.Println("could not save shared pack:", err)
+			return
+		}
+		s.broadcast(M{"t": "pack", "pack": json.RawMessage(data)}, nil)
+		s.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeAPIError(w, http.StatusMethodNotAllowed, "Use GET or POST for shared packs.")
+	}
+}
+
 func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	setAPICORS(w)
 	if r.Method == http.MethodOptions {
@@ -1345,6 +1452,7 @@ func main() {
 	save := flag.String("save", "world.mcsrv.json", "world save file")
 	operatorCode := flag.String("op-code", os.Getenv("EZZYCRAFT_OP_CODE"), "server operator code; required to unlock in-game server settings (or set EZZYCRAFT_OP_CODE)")
 	definitionsDir := flag.String("definitions-dir", filepath.Join("server_data", "definitions"), "folder for shared item/block JSON definitions")
+	packsDir := flag.String("packs-dir", filepath.Join("server_data", "packs"), "folder for shared JavaScript pack JSON files")
 	useNgrok := flag.Bool("ngrok", false, "start an ngrok tunnel and print the public URL")
 	ngrokDomain := flag.String("ngrok-domain", "", "optional reserved ngrok domain, e.g. my-name.ngrok-free.app")
 	flag.Parse()
@@ -1354,12 +1462,16 @@ func main() {
 		players:        map[int]*player{},
 		savePath:       *save,
 		definitionsDir: *definitionsDir,
+		packsDir:       *packsDir,
 		operatorCode:   *operatorCode,
 		pvpKnockback:   defaultPvpKnockback,
 		wtime:          startTime,
 	}
 	if err := os.MkdirAll(s.definitionsDir, 0o755); err != nil {
 		log.Fatal("could not create shared definitions folder: ", err)
+	}
+	if err := os.MkdirAll(s.packsDir, 0o755); err != nil {
+		log.Fatal("could not create shared packs folder: ", err)
 	}
 	if s.operatorCode == "" {
 		log.Println("server operator settings are disabled (set -op-code to enable them)")
@@ -1397,6 +1509,7 @@ func main() {
 	http.HandleFunc("/ws", s.handleWS)
 	http.HandleFunc("/api/operator", s.handleOperator)
 	http.HandleFunc("/api/definitions", s.handleDefinitions)
+	http.HandleFunc("/api/packs", s.handlePacks)
 	http.HandleFunc("/api/settings", s.handleSettings)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {

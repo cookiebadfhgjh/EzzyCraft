@@ -3914,17 +3914,23 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
     }
     if (!serverOperatorCode) throw new Error('Unlock Server Settings before importing a definition.');
     const source = JSON.parse(await file.text());
-    const sources = source && source.schema === 'coop1.10.item-block-pack.v1'
+    const isPack = source && source.schema === 'coop1.10.item-block-pack.v2';
+    const sources = isPack && Array.isArray(source.entries)
+      ? source.entries.filter(entry => entry.type === 'item' || entry.type === 'block').map(entry => entry.definition)
+      : source && source.schema === 'coop1.10.item-block-pack.v1'
       ? source.definitions
       : [source];
-    if (!Array.isArray(sources) || sources.length < 1 || sources.length > 74) {
-      throw new Error('A pack must contain from 1 to 74 item/block definitions.');
+    if (!Array.isArray(sources) || sources.length > 74 ||
+        (!sources.length && (!isPack || !source.entries.length)) ||
+        (isPack && (!Array.isArray(source.entries) || source.entries.length > 256))) {
+      throw new Error('A pack may contain up to 74 item/block definitions and 256 total entries.');
     }
     const preparedDefinitions = [];
     const ids = new Set();
     const tiles = new Set();
     for (const itemSource of sources) {
       const prepared = await prepareCustomDefinition(itemSource);
+      if (isPack) prepared.definition.packId = source.id;
       const id = prepared.definition.registry.id;
       const tile = prepared.definition.texture.atlasIndex;
       if (ids.has(id)) throw new Error('The pack contains duplicate registry ID ' + id + '.');
@@ -3934,8 +3940,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
       assertCustomDefinitionAvailable(prepared.definition);
       preparedDefinitions.push(prepared);
     }
-    const approved = approveCustomFeatureScripts(preparedDefinitions.map(prepared => prepared.definition));
-    const containsScripts = preparedDefinitions.some(prepared => hasCustomFeatureCode(prepared.definition));
+    if (isPack) validateCustomPack(source, preparedDefinitions);
     let imported = 0;
     let grantWarning = '';
     for (const prepared of preparedDefinitions) {
@@ -3970,10 +3975,22 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
       if (!previous && currentWorld) addToInventory(id, 1);
       imported++;
     }
+    if (isPack) {
+      const response = await fetch(serverApiUrl('/api/packs', NET.code || location.host || defaultServerAddr()), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+        body: JSON.stringify(source),
+      });
+      if (!response.ok) {
+        throw new Error('Imported ' + imported + ' item/block definitions, but the shared pack could not be saved: ' +
+          (await response.text() || response.statusText));
+      }
+      await installCustomPack(source, preparedDefinitions);
+    }
     renderHotbar();
     if (inventoryOpen) renderInventory();
     toast(imported + (imported === 1 ? ' definition imported.' : ' definitions imported.') +
-      (containsScripts ? (approved ? ' JavaScript mechanics enabled.' : ' JavaScript mechanics were left disabled.') : '') +
+      (isPack ? ' Pack services and features are active.' : '') +
       grantWarning);
   } catch (error) {
     console.error('Could not import item definition:', error);
@@ -4713,18 +4730,20 @@ const RECIPES = [
 RECIPES.push({"type":"shaped","pattern":[[0,110,110],[0,100,110],[0,100,0]],"result":{"id":119,"count":1}});
 
 const CUSTOM_DEFINITIONS_KEY = 'coop_custom_definitions_v1';
-const CUSTOM_FEATURE_APPROVALS_KEY = 'coop_custom_feature_approvals_v1';
 const MAX_CUSTOM_DEFINITION_BYTES = 32 * 1024 * 1024;
 const customFeatureRunners = new Map();
 const customFeatureActionBudgets = new Map();
-const sessionCustomFeatureApprovals = new Map();
 const failedCustomFeatureHashes = new Map();
+const customPacksById = new Map();
+const customPackInstallPromises = new Map();
+const customPackEventQueues = new Map();
+const customPackEventBusy = new Set();
 let customFeatureHealthEffectAt = -Infinity;
 let customFeaturePermissionNoticeAt = -Infinity;
 let customFeatureCallId = 0;
-function customFeatureHash(source, services = '') {
+function customFeatureHash(source) {
   let hash = 2166136261;
-  const combined = source + '\u0000' + services;
+  const combined = source;
   for (let i = 0; i < combined.length; i++) {
     hash ^= combined.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
@@ -4732,72 +4751,8 @@ function customFeatureHash(source, services = '') {
   return (hash >>> 0).toString(16);
 }
 function customUniqueSource(definition) {
-  if (definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2') {
-    return definition.mechanics.unique || '';
-  }
-  return definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
-    ? definition.features.source || ''
-    : '';
-}
-function customServicesSource(definition) {
-  return definition.features && definition.features.runtime === 'coop1.10.javascript-services.v1'
-    ? definition.features.services || ''
-    : '';
-}
-function customFeatureHashForDefinition(definition) {
-  return customFeatureHash(customUniqueSource(definition), customServicesSource(definition));
-}
-function hasCustomFeatureCode(definition) {
-  return Boolean(customUniqueSource(definition).trim() || customServicesSource(definition).trim());
-}
-function customFeatureApprovals() {
-  const stored = localStorage.getItem(CUSTOM_FEATURE_APPROVALS_KEY);
-  if (!stored) return {};
-  const approvals = JSON.parse(stored);
-  if (!approvals || typeof approvals !== 'object' || Array.isArray(approvals)) {
-    throw new Error('Stored JavaScript feature approvals are invalid.');
-  }
-  return approvals;
-}
-function approveCustomFeatureScripts(definitions) {
-  const scripted = definitions.filter(hasCustomFeatureCode);
-  if (!scripted.length) return true;
-  let approvals = {};
-  try {
-    approvals = customFeatureApprovals();
-  } catch (error) {
-    console.error('Could not read JavaScript feature approvals:', error);
-    toast('JavaScript features cannot be remembered by this browser; enabling them for this session only.', true);
-  }
-  const pending = scripted.filter(definition =>
-    approvals[definition.registry.id] !== customFeatureHashForDefinition(definition));
-  if (!pending.length) return true;
-  const itemList = pending.map(definition => definition.name).join(', ');
-  if (!window.confirm(
-    'This definition contains unique JavaScript mechanics or shared services: ' + itemList +
-    '. Enable them? Code runs in an isolated worker without access to the game page or network. ' +
-    'Game-changing actions are checked by the game and server.')) return false;
-  for (const definition of pending) {
-    approvals[definition.registry.id] = customFeatureHashForDefinition(definition);
-    sessionCustomFeatureApprovals.set(definition.registry.id, customFeatureHashForDefinition(definition));
-  }
-  try {
-    localStorage.setItem(CUSTOM_FEATURE_APPROVALS_KEY, JSON.stringify(approvals));
-  } catch (error) {
-    console.error('Could not save JavaScript feature approvals:', error);
-  }
-  return true;
-}
-function customFeatureApproved(definition) {
-  if (!hasCustomFeatureCode(definition)) return false;
-  const hash = customFeatureHashForDefinition(definition);
-  if (sessionCustomFeatureApprovals.get(definition.registry.id) === hash) return true;
-  try {
-    return customFeatureApprovals()[definition.registry.id] === hash;
-  } catch (error) {
-    console.error('Could not read JavaScript feature approvals:', error);
-    return false;
-  }
+  return definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+    ? definition.mechanics.unique || '' : '';
 }
 function disposeCustomFeatureRunner(id, reason = 'JavaScript feature worker was stopped.') {
   const runner = customFeatureRunners.get(id);
@@ -4810,11 +4765,10 @@ function disposeCustomFeatureRunner(id, reason = 'JavaScript feature worker was 
   }
   runner.pending.clear();
 }
-function createCustomFeatureRunner(definition) {
-  const id = definition.registry.id;
-  const source = customUniqueSource(definition);
-  const services = customServicesSource(definition);
-  const hash = customFeatureHashForDefinition(definition);
+function createCustomFeatureRunner(pack) {
+  const id = pack.id;
+  const source = pack.javascript.source;
+  const hash = customFeatureHash(source);
   if (failedCustomFeatureHashes.get(id) === hash) {
     throw new Error('This JavaScript mechanics module was disabled after an earlier error.');
   }
@@ -4826,7 +4780,7 @@ function createCustomFeatureRunner(definition) {
   frame.setAttribute('sandbox', 'allow-scripts');
   frame.title = 'Isolated custom item feature worker';
   const workerBootstrap = `
-    let handlers, services, allowed, itemId;
+    let module, allowed, itemId;
     self.onmessage = async event => {
       const data = event.data;
       if (data.type === 'init') {
@@ -4836,13 +4790,24 @@ function createCustomFeatureRunner(definition) {
           try { Object.defineProperty(globalThis, name, { value: undefined, writable: false, configurable: false }); } catch {}
         }
         try {
-          handlers = data.source ? new Function('"use strict"; return (' + data.source + ');')() : {};
-          services = data.services ? new Function('"use strict"; return (' + data.services + ');')() : {};
-          if (!handlers || typeof handlers !== 'object' || Array.isArray(handlers)) throw new Error('Unique mechanics must evaluate to an object of hooks.');
-          if (!services || typeof services !== 'object' || Array.isArray(services)) throw new Error('Shared services must evaluate to an object of functions.');
-          for (const [name, service] of Object.entries(services)) {
-            if (!/^[a-zA-Z_$][\\w$]*$/.test(name) || typeof service !== 'function') {
-              throw new Error('Each shared service must be a named function.');
+          module = data.source ? new Function('"use strict"; return (' + data.source + ');')() : {};
+          if (!module || typeof module !== 'object' || Array.isArray(module)) throw new Error('Pack JavaScript must evaluate to an object.');
+          module.items = module.items || {};
+          module.features = module.features || {};
+          module.services = module.services || {};
+          for (const [name, service] of Object.entries(module.services)) {
+            if (!/^[a-zA-Z_$][\\w$]*$/.test(name) || typeof service !== 'function') throw new Error('Each pack service must be a named function.');
+          }
+          for (const entry of data.entries) {
+            if (entry.type === 'service' && typeof module.services[entry.name] !== 'function') {
+              throw new Error('Pack service entry "' + entry.name + '" is missing from the shared module.');
+            }
+            if (entry.type === 'feature' && typeof module.features[entry.handler] !== 'function') {
+              throw new Error('Pack feature handler "' + entry.handler + '" is missing from the shared module.');
+            }
+            if ((entry.type === 'item' || entry.type === 'block') && entry.behaviorKey &&
+                (!module.items[entry.behaviorKey] || typeof module.items[entry.behaviorKey] !== 'object')) {
+              throw new Error('Pack item behavior "' + entry.behaviorKey + '" is missing from the shared module.');
             }
           }
           postMessage({ type: 'ready', id: itemId });
@@ -4851,11 +4816,28 @@ function createCustomFeatureRunner(definition) {
         }
         return;
       }
-      if (!handlers || !allowed.includes(data.hook) || typeof handlers[data.hook] !== 'function') return;
+      if (!module || !allowed.includes(data.hook)) return;
+      const owner = data.scope === 'feature' ? module.features : module.items;
+      const entry = owner && owner[data.key];
+      const hook = typeof entry === 'function' ? entry : entry && entry[data.hook];
+      if (typeof hook !== 'function') {
+        postMessage({ type: 'result', id: data.id, result: null, actions: [] });
+        return;
+      }
       const actions = [];
       const push = (capability, type, args) => {
         if (data.capabilities.includes(capability) && actions.length < 128) actions.push({ type, args });
       };
+      const game = Object.freeze({
+        services: Object.freeze({
+          rayTrace: (maxDistance = Infinity, maxHits = Infinity) => {
+            const hits = data.context.rayHits || [];
+            const distanceLimit = Number.isFinite(maxDistance) ? Math.max(0, maxDistance) : Infinity;
+            const hitLimit = Number.isFinite(maxHits) ? Math.max(0, Math.floor(maxHits)) : hits.length;
+            return hits.filter(hit => hit.distance <= distanceLimit).slice(0, hitLimit);
+          },
+        }),
+      });
       const api = {
         combat: Object.freeze({
           modifyHit: (damageMultiplier = 1, knockbackMultiplier = 1) =>
@@ -4867,17 +4849,13 @@ function createCustomFeatureRunner(definition) {
           spawnDrop: (x, y, z, id, count = 1) => push('world', 'spawnDrop', [x, y, z, id, count]),
           setTime: hours => push('world', 'setTime', [hours]),
           time: data.context.world.time,
-          raycast: (maxDistance = 8) => {
-            const hit = data.context.raycast;
-            return Number.isFinite(maxDistance) && maxDistance >= 0 && hit && hit.distance <= maxDistance ? hit : null;
-          },
         }),
         players: Object.freeze({
           list: () => data.context.players,
           get: id => data.context.players.find(other => other.id === id) || null,
         }),
         projectiles: Object.freeze({
-          launch: options => push('world', 'launchProjectile', [options || {}]),
+          launch: options => push('world', 'launchProjectile', [options || {}, { scope: data.scope, key: data.key }]),
         }),
         player: Object.freeze({
           heal: amount => push('player', 'heal', [amount]),
@@ -4889,17 +4867,14 @@ function createCustomFeatureRunner(definition) {
           particle: (name, x, y, z) => push('effects', 'particle', [name, x, y, z]),
         }),
       };
-      api.services = Object.freeze(Object.fromEntries(Object.entries(services).map(([name, service]) =>
-        [name, (...args) => service(api, data.context, ...args)])));
+      api.services = Object.freeze(Object.fromEntries(Object.entries(module.services).map(([name, service]) =>
+        [name, (...args) => service(game, api, data.context, ...args)])));
       Object.freeze(api);
       try {
-        const hook = handlers[data.hook];
-        const result = typeof hook === 'function' ? await hook(api, data.context) : null;
+        const result = await hook(game, api, data.context, ...(data.args || []));
         postMessage({ type: 'result', id: data.id, result, actions });
-        close();
       } catch (error) {
         postMessage({ type: 'result', id: data.id, error: error && error.message || String(error), actions });
-        close();
       }
     };
   `;
@@ -4910,23 +4885,33 @@ function createCustomFeatureRunner(definition) {
     JSON.stringify(workerBootstrap) + '],{type:"text/javascript"}));worker=new Worker(url);URL.revokeObjectURL(url);' +
     'worker.onmessage=event=>{const message=event.data;parent.postMessage({channel:"coop-feature",id:config.id,message},"*");' +
     'if(message.type==="ready"){workerReady=true;for(const call of queued.splice(0))worker.postMessage(call)}' +
-    'else if(message.type==="result"||message.type==="error"){workerReady=false;worker.terminate();worker=null}};' +
+    'else if(message.type==="result"){workerReady=true;for(const call of queued.splice(0))worker.postMessage(call)}' +
+    'else if(message.type==="error"){workerReady=false;worker.terminate();worker=null}};' +
     'worker.onerror=event=>{parent.postMessage({channel:"coop-feature",id:config.id,message:{type:"error",message:event.message||"Worker failed"}},"*");workerReady=false;worker.terminate();worker=null};' +
-    'worker.postMessage({type:"init",id:config.id,source:config.source,services:config.services,events:config.events})}' +
+    'worker.postMessage({type:"init",id:config.id,source:config.source,events:config.events,entries:config.entries})}' +
     'addEventListener("message",event=>{if(event.source!==parent)return;const data=event.data;if(data.type==="init"){config=data;startWorker()}' +
     'else if(worker&&workerReady)worker.postMessage(data);else{queued.push(data);if(!worker)startWorker()}});</scr'+'ipt>';
   const runner = {
     id, hash, frame, ready: false, failed: null, pending: new Map(), queue: [],
-    events: definition.features.events ||
-      ['onUse', 'onHit', 'onBlockUse', 'onBlockBreak', 'onBlockPlace', 'onTick', 'onProjectileHit'],
-    capabilities: definition.features.capabilities,
+    readyPromise: null, resolveReady: null, rejectReady: null,
+    events: ['onUse', 'onHit', 'onBlockUse', 'onBlockBreak', 'onBlockPlace', 'onTick', 'onProjectileHit', 'onChat', 'onPlayerJoin', 'onPlayerLeave'],
+    capabilities: ['combat', 'inventory', 'world', 'player', 'effects'],
   };
+  runner.readyPromise = new Promise((resolve, reject) => {
+    runner.resolveReady = resolve;
+    runner.rejectReady = reject;
+  });
+  runner.readyPromise.catch(() => {});
   customFeatureRunners.set(id, runner);
   frame.addEventListener('load', () => {
     frame.contentWindow.postMessage({
-      type: 'init', id, source, services,
+      type: 'init', id, source,
       events: runner.events,
-      capabilities: definition.features.capabilities,
+      entries: pack.entries.map(entry => ({
+        type: entry.type, name: entry.name, event: entry.event, handler: entry.handler,
+        behaviorKey: entry.definition && entry.definition.mechanics && entry.definition.mechanics.uniqueRuntime === 'coop1.10.pack-hook-ref.v1'
+          ? entry.definition.mechanics.unique : '',
+      })),
     }, '*');
   }, { once: true });
   document.body.appendChild(frame);
@@ -4940,11 +4925,14 @@ window.addEventListener('message', event => {
   const response = message.message;
   if (response.type === 'ready') {
     runner.ready = true;
+    runner.resolveReady();
     for (const call of runner.queue.splice(0)) runner.frame.contentWindow.postMessage(call, '*');
     return;
   }
   if (response.type === 'error') {
     runner.failed = response.message || 'JavaScript module failed to start.';
+    failedCustomFeatureHashes.set(runner.id, runner.hash);
+    runner.rejectReady(new Error(runner.failed));
     for (const pending of runner.pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new Error(runner.failed));
@@ -4965,29 +4953,120 @@ window.addEventListener('message', event => {
   }
   pending.resolve({ result: response.result, actions: Array.isArray(response.actions) ? response.actions : [] });
 });
-function callCustomFeatureHook(definition, hook, context) {
-  if (!customUniqueSource(definition).trim() ||
-      !hasCustomFeatureCode(definition) || !customFeatureApproved(definition)) return Promise.resolve(null);
-  if (failedCustomFeatureHashes.get(definition.registry.id) === customFeatureHashForDefinition(definition)) {
-    return Promise.resolve(null);
+function callCustomFeatureHook(definition, hook, context, hookRef = null) {
+  let pack = customPacksById.get(definition.packId);
+  let key = hookRef && hookRef.key || definition.mechanics && definition.mechanics.unique;
+  if (!pack && customUniqueSource(definition).trim()) {
+    const legacyId = 'legacy_' + definition.registry.id;
+    pack = {
+      id: legacyId, name: definition.name,
+      javascript: { source: '(function(){const old=(' + customUniqueSource(definition) +
+        ');return {items:{legacy:Object.fromEntries(Object.entries(old).map(([name,hook])=>[name,(game,api,event)=>hook(api,event)]))},services:{},features:{}}})()' },
+      entries: [],
+    };
+    customPacksById.set(legacyId, pack);
+    definition.packId = legacyId;
+    key = 'legacy';
   }
-  const runner = createCustomFeatureRunner(definition);
+  if (!pack || !key) return Promise.resolve(null);
+  if (failedCustomFeatureHashes.get(pack.id) === customFeatureHash(pack.javascript.source)) return Promise.resolve(null);
+  const runner = createCustomFeatureRunner(pack);
   if (runner.failed) return Promise.resolve(null);
   if (runner.pending.size >= 1) return Promise.resolve(null);
   const id = ++customFeatureCallId;
-  const call = { id, hook, context, capabilities: runner.capabilities };
+  const call = {
+    id, scope: hookRef && hookRef.scope === 'feature' ? 'feature' : 'item', key, hook,
+    capabilities: runner.capabilities,
+    context: { ...context, rayHits: getCustomRayTraceHits(64, 64) },
+  };
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      failedCustomFeatureHashes.set(definition.registry.id, runner.hash);
-      disposeCustomFeatureRunner(definition.registry.id, 'JavaScript feature hook exceeded its 2 second time limit.');
+      failedCustomFeatureHashes.set(pack.id, runner.hash);
+      disposeCustomFeatureRunner(pack.id, 'Pack JavaScript hook exceeded its 2 second time limit.');
     }, 2000);
     runner.pending.set(id, { resolve, reject, timeout });
     if (runner.ready) runner.frame.contentWindow.postMessage(call, '*');
     else runner.queue.push(call);
   });
 }
+function callPackFeature(pack, entry, context) {
+  if (failedCustomFeatureHashes.get(pack.id) === customFeatureHash(pack.javascript.source)) {
+    return Promise.resolve(null);
+  }
+  const runner = createCustomFeatureRunner(pack);
+  if (runner.failed || runner.pending.size >= 1) return Promise.resolve(null);
+  const id = ++customFeatureCallId;
+  const call = {
+    id, scope: 'feature', key: entry.handler, hook: entry.event,
+    capabilities: runner.capabilities,
+    context: { ...context, rayHits: getCustomRayTraceHits(64, 64) },
+  };
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      failedCustomFeatureHashes.set(pack.id, runner.hash);
+      disposeCustomFeatureRunner(pack.id, 'Pack JavaScript feature exceeded its 2 second time limit.');
+    }, 2000);
+    runner.pending.set(id, { resolve, reject, timeout });
+    if (runner.ready) runner.frame.contentWindow.postMessage(call, '*');
+    else runner.queue.push(call);
+  });
+}
+function dispatchCustomPackEvent(eventName, event) {
+  for (const pack of customPacksById.values()) {
+    const entries = pack.entries.filter(entry => entry.type === 'feature' && entry.event === eventName);
+    if (!entries.length) continue;
+    if (eventName === 'onTick' && customPackEventBusy.has(pack.id)) continue;
+    let queue = customPackEventQueues.get(pack.id);
+    if (!queue) {
+      queue = [];
+      customPackEventQueues.set(pack.id, queue);
+    }
+    if (queue.length >= 32) queue.shift();
+    queue.push({ entries, event });
+    dispatchCustomPackEventQueue(pack);
+  }
+}
+function dispatchCustomPackEventQueue(pack) {
+  if (customPackEventBusy.has(pack.id)) return;
+  const queue = customPackEventQueues.get(pack.id);
+  const next = queue && queue.shift();
+  if (!next) return;
+  customPackEventBusy.add(pack.id);
+  (async () => {
+    for (const entry of next.entries) {
+      const response = await callPackFeature(pack, entry, {
+        ...next.event,
+        player: {
+          id: NET.selfId, name: NET.name || getPlayerName(), health,
+          dead: health <= 0, gameMode,
+          position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+        },
+        players: [
+          { id: NET.selfId, name: NET.name || getPlayerName(), health, dead: health <= 0,
+            position: { x: player.pos.x, y: player.pos.y, z: player.pos.z } },
+          ...[...remotePlayers.values()].map(other => ({
+            id: other.id, name: other.name, health: other.health, dead: other.dead,
+            position: { x: other.tx, y: other.ty, z: other.tz },
+          })),
+        ],
+        world: { time: worldTime * 24 },
+      });
+      if (response) applyCustomFeatureActions({
+        registry: { id: pack.id }, packId: pack.id, name: pack.name,
+        features: { capabilities: ['combat', 'inventory', 'world', 'player', 'effects'] },
+      }, response.actions);
+    }
+  })().catch(error => {
+    console.error('Pack feature dispatch failed for ' + pack.name + ':', error);
+    toast('Pack feature failed: ' + error.message, true);
+  }).finally(() => {
+    customPackEventBusy.delete(pack.id);
+    dispatchCustomPackEventQueue(pack);
+  });
+}
 function applyCustomFeatureActions(definition, actions) {
-  const capabilities = new Set(definition.features && definition.features.capabilities || []);
+  const capabilities = new Set(definition.features && definition.features.capabilities ||
+    ['combat', 'inventory', 'world', 'player', 'effects']);
   const validPosition = (x, y, z) => [x, y, z].every(Number.isFinite) &&
     Math.abs(x - player.pos.x) <= 64 && Math.abs(y - player.pos.y) <= 64 && Math.abs(z - player.pos.z) <= 64;
   const now = performance.now();
@@ -5028,7 +5107,7 @@ function applyCustomFeatureActions(definition, actions) {
         break;
       case 'launchProjectile':
         if (!capabilities.has('world') || !a || typeof a !== 'object' || Array.isArray(a)) break;
-        spawnCustomProjectile(definition, a);
+        spawnCustomProjectile(definition, a, b);
         break;
       case 'setTime':
         if (!capabilities.has('world') || !Number.isFinite(a) || a < 0 || a >= 24) break;
@@ -5094,7 +5173,7 @@ function applyCustomFeatureActions(definition, actions) {
   renderHotbar();
   if (inventoryOpen) renderInventory();
 }
-async function runCustomFeatureHook(definition, hook, context) {
+async function runCustomFeatureHook(definition, hook, context, hookRef = null) {
   try {
     const actor = {
       id: NET.selfId,
@@ -5122,8 +5201,8 @@ async function runCustomFeatureHook(definition, hook, context) {
         })),
       ],
       world: { time: worldTime * 24 },
-      raycast: getCustomRaycast(32),
-    });
+      rayHits: getCustomRayTraceHits(64, 64),
+    }, hookRef);
     if (!response) return null;
     applyCustomFeatureActions(definition, response.actions);
     return response.result;
@@ -5136,7 +5215,7 @@ async function runCustomFeatureHook(definition, hook, context) {
 const customProjectiles = [];
 const customProjectileGeometry = new THREE.SphereGeometry(0.12, 8, 6);
 const customProjectileMaterial = new THREE.MeshBasicMaterial({ color: 0xffd35a });
-function spawnCustomProjectile(definition, options) {
+function spawnCustomProjectile(definition, options, hookRef = null) {
   if (customProjectiles.length >= 128) return;
   const speed = Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
   const lifetime = Number.isFinite(options.lifetime) ? Math.max(0.1, Math.min(30, options.lifetime)) : 5;
@@ -5157,7 +5236,7 @@ function spawnCustomProjectile(definition, options) {
   mesh.position.copy(origin);
   scene.add(mesh);
   customProjectiles.push({
-    definition, mesh, position: origin, direction, speed, lifetime, age: 0,
+    definition, hookRef, mesh, position: origin, direction, speed, lifetime, age: 0,
     damage: Number.isFinite(options.damage) ? Math.max(0, Math.min(20, options.damage)) : 0,
   });
 }
@@ -5199,7 +5278,7 @@ function updateCustomProjectiles(dt) {
           health: other.health, dead: other.dead,
         },
         position,
-      });
+      }, projectile.hookRef);
       removeCustomProjectile(i);
       continue;
     }
@@ -5214,7 +5293,7 @@ function updateCustomProjectiles(dt) {
         projectile: { damage: projectile.damage, age: projectile.age },
         hit: { type: 'block', id: getBlock(hit.x, hit.y, hit.z), position, face: { x: hit.nx, y: hit.ny, z: hit.nz } },
         position,
-      });
+      }, projectile.hookRef);
       removeCustomProjectile(i);
       continue;
     }
@@ -5222,29 +5301,55 @@ function updateCustomProjectiles(dt) {
     projectile.mesh.position.copy(projectile.position);
   }
 }
-function getCustomRaycast(maxDistance) {
-  camera.getWorldDirection(forwardDir);
-  const blockHit = raycastVoxel(camera.position, forwardDir, maxDistance, false);
-  const playerHit = pvpEnabled && NET.role
-    ? findPvpTarget(camera.position, forwardDir, Math.min(maxDistance, blockHit ? blockHit.t : maxDistance))
-    : null;
-  if (playerHit) {
-    const other = playerHit.player;
-    return {
-      type: 'player', distance: playerHit.t,
-      player: {
-        id: other.id, name: other.name,
-        position: { x: other.tx, y: other.ty, z: other.tz },
-        health: other.health, dead: other.dead,
-      },
-    };
+function getCustomRayTraceHits(maxDistance = 64, maxHits = 64, origin = camera.position, direction = null) {
+  const dir = direction || camera.getWorldDirection(forwardDir);
+  const hits = [];
+  let x = Math.floor(origin.x), y = Math.floor(origin.y), z = Math.floor(origin.z);
+  const stepX = Math.sign(dir.x), stepY = Math.sign(dir.y), stepZ = Math.sign(dir.z);
+  const tDeltaX = stepX ? Math.abs(1 / dir.x) : Infinity;
+  const tDeltaY = stepY ? Math.abs(1 / dir.y) : Infinity;
+  const tDeltaZ = stepZ ? Math.abs(1 / dir.z) : Infinity;
+  let tMaxX = stepX > 0 ? (x + 1 - origin.x) / dir.x : stepX < 0 ? (x - origin.x) / dir.x : Infinity;
+  let tMaxY = stepY > 0 ? (y + 1 - origin.y) / dir.y : stepY < 0 ? (y - origin.y) / dir.y : Infinity;
+  let tMaxZ = stepZ > 0 ? (z + 1 - origin.z) / dir.z : stepZ < 0 ? (z - origin.z) / dir.z : Infinity;
+  let nx = 0, ny = 0, nz = 0, distance = 0;
+  while (distance <= maxDistance && hits.length < maxHits) {
+    const blockId = getBlock(x, y, z);
+    if (blockId !== AIR && !isFluid(blockId)) {
+      hits.push({
+        type: 'block', isBlock: true, isPlayer: false, id: blockId,
+        distance, position: { x: origin.x + dir.x * distance, y: origin.y + dir.y * distance, z: origin.z + dir.z * distance },
+        blockPosition: { x, y, z }, face: { x: nx, y: ny, z: nz },
+      });
+    }
+    if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+      x += stepX; distance = tMaxX; tMaxX += tDeltaX; nx = -stepX; ny = 0; nz = 0;
+    } else if (tMaxY < tMaxZ) {
+      y += stepY; distance = tMaxY; tMaxY += tDeltaY; nx = 0; ny = -stepY; nz = 0;
+    } else {
+      z += stepZ; distance = tMaxZ; tMaxZ += tDeltaZ; nx = 0; ny = 0; nz = -stepZ;
+    }
   }
-  if (!blockHit) return null;
-  return {
-    type: 'block', id: getBlock(blockHit.x, blockHit.y, blockHit.z), distance: blockHit.t,
-    position: { x: blockHit.x, y: blockHit.y, z: blockHit.z },
-    face: { x: blockHit.nx, y: blockHit.ny, z: blockHit.nz },
-  };
+  for (const other of remotePlayers.values()) {
+    if (other.dead) continue;
+    const playerDistance = rayAABB(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z,
+      other.tx - 0.3, other.ty, other.tz - 0.3,
+      other.tx + 0.3, other.ty + 1.8, other.tz + 0.3, maxDistance);
+    if (playerDistance < 0) continue;
+    hits.push({
+      type: 'player', isBlock: false, isPlayer: true, id: other.id, distance: playerDistance,
+      position: {
+        x: origin.x + dir.x * playerDistance,
+        y: origin.y + dir.y * playerDistance,
+        z: origin.z + dir.z * playerDistance,
+      },
+      player: {
+        id: other.id, name: other.name, health: other.health, dead: other.dead,
+        position: { x: other.tx, y: other.ty, z: other.tz },
+      },
+    });
+  }
+  return hits.sort((a, b) => a.distance - b.distance).slice(0, maxHits);
 }
 function findFreeDefinitionId(kind) {
   const minimum = kind === 'tool' ? 120 : 30;
@@ -5360,12 +5465,7 @@ function validateCustomDefinition(source) {
     }
     mechanics.unique = features.source;
     mechanics.uniqueRuntime = 'coop1.10.javascript-feature.v2';
-    features = {
-      runtime: 'coop1.10.javascript-services.v1',
-      services: '',
-      events: [...new Set(features.events)],
-      capabilities: features.capabilities,
-    };
+    features = undefined;
   } else if (features !== undefined) {
     if (!features || features.runtime !== 'coop1.10.javascript-services.v1' ||
         typeof features.services !== 'string' || features.services.length > 262144 ||
@@ -5387,8 +5487,12 @@ function validateCustomDefinition(source) {
       (typeof mechanics.unique !== 'string' || mechanics.unique.length > 262144)) {
     throw new Error('Unique mechanics JavaScript must be 256 KB or smaller.');
   }
+  if (mechanics.uniqueRuntime === 'coop1.10.pack-hook-ref.v1' &&
+      (typeof mechanics.unique !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(mechanics.unique))) {
+    throw new Error('Pack hook reference must be a valid JavaScript identifier.');
+  }
   if (mechanics.uniqueRuntime !== undefined &&
-      mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2') {
+      !['coop1.10.javascript-feature.v2', 'coop1.10.pack-hook-ref.v1'].includes(mechanics.uniqueRuntime)) {
     throw new Error('Unique mechanics runtime is not supported.');
   }
   if (mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2' && !features) {
@@ -5661,6 +5765,106 @@ async function prepareCustomDefinition(source) {
   const modelTemplate = await makeCustomModelTemplate(definition.mesh);
   return { definition, modelTemplate };
 }
+function validateCustomPack(pack, preparedDefinitions) {
+  if (!pack || pack.schema !== 'coop1.10.item-block-pack.v2' ||
+      typeof pack.id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(pack.id) ||
+      !Array.isArray(pack.entries) || pack.entries.length < 1 || pack.entries.length > 256 ||
+      !pack.javascript || pack.javascript.runtime !== 'coop1.10.pack-javascript.v1' ||
+      typeof pack.javascript.source !== 'string' || pack.javascript.source.length > 1024 * 1024) {
+    throw new Error('Pack manifest or shared JavaScript module is invalid.');
+  }
+  if (pack.javascript.source.trim()) {
+    try {
+      new Function('return (' + pack.javascript.source + ');');
+    } catch (error) {
+      throw new Error('Pack JavaScript has a syntax error: ' + error.message);
+    }
+  }
+  const serviceNames = new Set();
+  const featureNames = new Set();
+  const itemKeys = new Set();
+  const definitionIds = new Set();
+  for (const entry of pack.entries) {
+    if (!entry || !['item', 'block', 'service', 'feature'].includes(entry.type)) {
+      throw new Error('Pack entries must be items, blocks, services, or features.');
+    }
+    if (entry.type === 'item' || entry.type === 'block') {
+      if (!entry.definition || entry.definition.kind !== (entry.type === 'item' ? 'tool' : 'block')) {
+        throw new Error('Pack item/block entry does not match its definition type.');
+      }
+      const id = entry.definition.registry && entry.definition.registry.id;
+      if (definitionIds.has(id)) throw new Error('Pack contains duplicate item/block ID ' + id + '.');
+      definitionIds.add(id);
+      const mechanic = entry.definition.mechanics;
+      if (mechanic && mechanic.uniqueRuntime === 'coop1.10.pack-hook-ref.v1') {
+        itemKeys.add(mechanic.unique);
+      }
+    } else if (entry.type === 'service') {
+      if (typeof entry.name !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.name) || serviceNames.has(entry.name)) {
+        throw new Error('Pack contains an invalid or duplicate service reference.');
+      }
+      serviceNames.add(entry.name);
+    } else {
+      if (typeof entry.name !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.name) || featureNames.has(entry.name) ||
+          typeof entry.handler !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.handler) ||
+          !['onChat', 'onTick', 'onPlayerJoin', 'onPlayerLeave'].includes(entry.event)) {
+        throw new Error('Pack contains an invalid feature entry.');
+      }
+      featureNames.add(entry.name);
+    }
+  }
+  const preparedIds = new Set(preparedDefinitions.map(prepared => prepared.definition.registry.id));
+  for (const id of definitionIds) if (!preparedIds.has(id)) throw new Error('Pack item definitions failed validation.');
+}
+async function installCustomPack(pack, preparedDefinitions = null) {
+  if (!pack || typeof pack.id !== 'string') return installCustomPackNow(pack, preparedDefinitions);
+  const version = customFeatureHash(JSON.stringify(pack));
+  const currentlyInstalled = customPacksById.get(pack.id);
+  if (currentlyInstalled && customFeatureHash(JSON.stringify(currentlyInstalled)) === version) {
+    return currentlyInstalled;
+  }
+  const existingInstall = customPackInstallPromises.get(pack.id);
+  if (existingInstall) {
+    await existingInstall;
+    const installed = customPacksById.get(pack.id);
+    if (installed && customFeatureHash(JSON.stringify(installed)) === version) {
+      return installed;
+    }
+  }
+  const install = installCustomPackNow(pack, preparedDefinitions);
+  customPackInstallPromises.set(pack.id, install);
+  try {
+    return await install;
+  } finally {
+    if (customPackInstallPromises.get(pack.id) === install) customPackInstallPromises.delete(pack.id);
+  }
+}
+async function installCustomPackNow(pack, preparedDefinitions = null) {
+  let prepared = preparedDefinitions;
+  if (!prepared) {
+    prepared = [];
+    for (const entry of pack.entries) {
+      if (entry.type !== 'item' && entry.type !== 'block') continue;
+      const item = await prepareCustomDefinition(entry.definition);
+      item.definition.packId = pack.id;
+      prepared.push(item);
+    }
+  }
+  validateCustomPack(pack, prepared);
+  for (const item of prepared) item.definition.packId = pack.id;
+  const runner = createCustomFeatureRunner(pack);
+  await runner.readyPromise;
+  const previous = customPacksById.get(pack.id);
+  if (previous) disposeCustomFeatureRunner(pack.id, 'Pack was updated.');
+  customPacksById.set(pack.id, pack);
+  failedCustomFeatureHashes.delete(pack.id);
+  for (const item of prepared) {
+    registerCustomDefinition(item.definition, item.modelTemplate);
+  }
+  renderHotbar();
+  if (inventoryOpen) renderInventory();
+  return pack;
+}
 async function restoreCustomDefinitions() {
   let stored;
   try {
@@ -5692,7 +5896,6 @@ async function loadServerCustomDefinitions(addr) {
       console.error('Could not install a shared server definition:', error);
     }
   }
-  approveCustomFeatureScripts(preparedDefinitions.map(prepared => prepared.definition));
   for (const prepared of preparedDefinitions) {
     try {
       installPreparedSharedDefinition(prepared, false);
@@ -5700,10 +5903,24 @@ async function loadServerCustomDefinitions(addr) {
       console.error('Could not install a shared server definition:', error);
     }
   }
+  try {
+    const response = await fetch(serverApiUrl('/api/packs', addr));
+    if (!response.ok) throw new Error(await response.text() || 'Could not load shared server packs.');
+    const packs = await response.json();
+    if (!Array.isArray(packs)) throw new Error('The server returned an invalid pack list.');
+    for (const pack of packs) {
+      try {
+        await installCustomPack(pack);
+      } catch (error) {
+        console.error('Could not install a shared server pack:', error);
+      }
+    }
+  } catch (error) {
+    console.warn('Shared JavaScript packs are unavailable:', error);
+  }
 }
 async function installSharedDefinition(source, notify = true) {
   const prepared = await prepareCustomDefinition(source);
-  if (notify) approveCustomFeatureScripts([prepared.definition]);
   installPreparedSharedDefinition(prepared, notify);
 }
 function installPreparedSharedDefinition(prepared, notify) {
@@ -6579,7 +6796,7 @@ async function requestPvpAttack(targetId) {
   updatePvpCooldownUI();
   const msg = { t: 'pvp-attack', id: targetId };
   let damageMultiplier = 1, knockbackMultiplier = 1;
-  if (definition && definition.features) {
+  if (definition && (definition.packId || customUniqueSource(definition))) {
     const target = remotePlayers.get(targetId);
     const result = await runCustomFeatureHook(definition, 'onHit', {
       type: 'player', id: targetId,
@@ -6590,7 +6807,7 @@ async function requestPvpAttack(targetId) {
         health: target.health, dead: target.dead,
       } : null,
     });
-    if (definition.features.capabilities.includes('combat') && result && typeof result === 'object') {
+    if (result && typeof result === 'object') {
       if (Number.isFinite(result.damageMultiplier)) damageMultiplier = Math.max(0, Math.min(10, result.damageMultiplier));
       if (Number.isFinite(result.knockbackMultiplier)) knockbackMultiplier = Math.max(0, Math.min(3, result.knockbackMultiplier));
     }
@@ -6659,6 +6876,12 @@ function guestHandle(d) {
       void installSharedDefinition(d.definition).catch(error => {
         console.error('Could not install a shared server definition:', error);
         toast('Could not install a shared server definition: ' + error.message, true);
+      });
+      break;
+    case 'pack':
+      void installCustomPack(d.pack).catch(error => {
+        console.error('Could not install a shared JavaScript pack:', error);
+        toast('Could not install a shared JavaScript pack: ' + error.message, true);
       });
       break;
     case 'pvp-mode':
@@ -6758,15 +6981,31 @@ function guestHandle(d) {
       if ([d.x, d.y, d.z, d.id].every(Number.isInteger)) applyNetBlock(d.x, d.y, d.z, d.id);
       break;
     case 'c':
-      chatLine(cleanName(d.n) || '?', String(d.m || '').slice(0, 120));
+      {
+        const sender = cleanName(d.n) || '?';
+        const message = String(d.m || '').slice(0, 120);
+        dispatchCustomPackEvent('onChat', {
+          type: 'chat', message, sender,
+          senderPlayer: [...remotePlayers.values()].find(other => other.name === sender) ||
+            (sender === NET.name ? { id: NET.selfId, name: NET.name, health } : null),
+        });
+        chatLine(sender, message);
+      }
       break;
     case 'j': {
       const nm = cleanName(d.name) || 'Player';
-      if (addRemotePlayer(d.id, nm, SPAWN.x, SPAWN.y, SPAWN.z, 0, 0)) chatLine('', nm + ' joined the game', true);
+      if (addRemotePlayer(d.id, nm, SPAWN.x, SPAWN.y, SPAWN.z, 0, 0)) {
+        dispatchCustomPackEvent('onPlayerJoin', { type: 'player-join', joinedPlayer: { id: d.id, name: nm } });
+        chatLine('', nm + ' joined the game', true);
+      }
       updateStatus(); updatePauseUI();
       break;
     }
     case 'l': {
+      const leavingPlayer = remotePlayers.get(d.id);
+      if (leavingPlayer) dispatchCustomPackEvent('onPlayerLeave', {
+        type: 'player-leave', leavingPlayer: { id: leavingPlayer.id, name: leavingPlayer.name },
+      });
       removeRemotePlayer(d.id);
       chatLine('', (cleanName(d.name) || 'Player') + ' left the game', true);
       updateStatus(); updatePauseUI();
@@ -7027,6 +7266,7 @@ function update(dt) {
     if (customFeatureTickTimer >= 0.25) {
       const tickDt = Math.min(1, customFeatureTickTimer);
       customFeatureTickTimer = 0;
+      dispatchCustomPackEvent('onTick', { type: 'tick', dt: tickDt });
       const heldStack = hotbar[selected];
       const heldDefinition = heldStack && customDefinitionsById.get(heldStack.id);
       if (heldDefinition) {

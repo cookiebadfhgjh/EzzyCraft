@@ -347,6 +347,7 @@ func TestHandleDefinitionsRequiresCodeAndPersists(t *testing.T) {
 		operatorCode:   "test-code",
 		players:        map[int]*player{1: recipient},
 	}
+
 	definition := `{"schema":"coop1.10.item-block-definition.v1","kind":"block","name":"Shared Block","registry":{"id":30}}`
 
 	unauthorized := httptest.NewRequest(http.MethodPost, "/api/definitions", strings.NewReader(definition))
@@ -395,5 +396,42 @@ func TestHandleDefinitionsRequiresCodeAndPersists(t *testing.T) {
 	s.handleDefinitions(getResponse, httptest.NewRequest(http.MethodGet, "/api/definitions", nil))
 	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"name":"Updated Block"`) {
 		t.Fatalf("GET response = %d %q, want updated definition", getResponse.Code, getResponse.Body.String())
+	}
+}
+
+func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
+	dir := t.TempDir()
+	recipient := &player{send: make(chan []byte, 2)}
+	s := &server{
+		packsDir:     dir,
+		operatorCode: "test-code",
+		players:      map[int]*player{1: recipient},
+	}
+	pack := `{"schema":"coop1.10.item-block-pack.v2","id":"test_pack","entries":[{"type":"feature","name":"chat","event":"onChat","handler":"chat"}],"javascript":{"runtime":"coop1.10.pack-javascript.v1","source":"({features:{chat(){}}})"}}`
+
+	unauthorized := httptest.NewRecorder()
+	s.handlePacks(unauthorized, httptest.NewRequest(http.MethodPost, "/api/packs", strings.NewReader(pack)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized POST status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/packs", strings.NewReader(pack))
+	request.Header.Set("X-Server-Op-Code", "test-code")
+	response := httptest.NewRecorder()
+	s.handlePacks(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("authorized POST status = %d, want %d: %s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+	if message := string(<-recipient.send); !strings.Contains(message, `"t":"pack"`) {
+		t.Fatalf("broadcast = %q, want shared pack message", message)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "test_pack.json")); err != nil {
+		t.Fatalf("pack file was not saved: %v", err)
+	}
+
+	getResponse := httptest.NewRecorder()
+	s.handlePacks(getResponse, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
+	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"id":"test_pack"`) {
+		t.Fatalf("GET response = %d %q, want persisted pack", getResponse.Code, getResponse.Body.String())
 	}
 }
