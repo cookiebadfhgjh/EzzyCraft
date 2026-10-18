@@ -4738,6 +4738,7 @@ const MAX_CUSTOM_DEFINITION_BYTES = 32 * 1024 * 1024;
 const customFeatureRunners = new Map();
 const customFeatureActionBudgets = new Map();
 const failedCustomFeatureHashes = new Map();
+const failedCustomFeatureErrors = new Map();
 const customPacksById = new Map();
 const customPackInstallPromises = new Map();
 const customPackEventQueues = new Map();
@@ -4753,6 +4754,12 @@ function customFeatureHash(source) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+function customFeatureRunnerHash(pack) {
+  return customFeatureHash(JSON.stringify({
+    source: pack.javascript.source,
+    entries: pack.entries,
+  }));
 }
 function customUniqueSource(definition) {
   return definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
@@ -4772,9 +4779,10 @@ function disposeCustomFeatureRunner(id, reason = 'JavaScript feature worker was 
 function createCustomFeatureRunner(pack) {
   const id = pack.id;
   const source = pack.javascript.source;
-  const hash = customFeatureHash(source);
+  const hash = customFeatureRunnerHash(pack);
   if (failedCustomFeatureHashes.get(id) === hash) {
-    throw new Error('This JavaScript mechanics module was disabled after an earlier error.');
+    throw new Error('This JavaScript mechanics module was disabled after an earlier error: ' +
+      (failedCustomFeatureErrors.get(id) || 'unknown error'));
   }
   const existing = customFeatureRunners.get(id);
   if (existing && existing.hash === hash) return existing;
@@ -4936,6 +4944,7 @@ window.addEventListener('message', event => {
   if (response.type === 'error') {
     runner.failed = response.message || 'JavaScript module failed to start.';
     failedCustomFeatureHashes.set(runner.id, runner.hash);
+    failedCustomFeatureErrors.set(runner.id, runner.failed);
     runner.rejectReady(new Error(runner.failed));
     for (const pending of runner.pending.values()) {
       clearTimeout(pending.timeout);
@@ -4950,8 +4959,6 @@ window.addEventListener('message', event => {
   runner.pending.delete(response.id);
   clearTimeout(pending.timeout);
   if (response.error) {
-    runner.failed = response.error;
-    failedCustomFeatureHashes.set(runner.id, runner.hash);
     pending.reject(new Error(response.error));
     return;
   }
@@ -4973,7 +4980,7 @@ function callCustomFeatureHook(definition, hook, context, hookRef = null) {
     key = 'legacy';
   }
   if (!pack || !key) return Promise.resolve(null);
-  if (failedCustomFeatureHashes.get(pack.id) === customFeatureHash(pack.javascript.source)) return Promise.resolve(null);
+  if (failedCustomFeatureHashes.get(pack.id) === customFeatureRunnerHash(pack)) return Promise.resolve(null);
   const runner = createCustomFeatureRunner(pack);
   if (runner.failed) return Promise.resolve(null);
   if (runner.pending.size >= 1) return Promise.resolve(null);
@@ -4986,6 +4993,7 @@ function callCustomFeatureHook(definition, hook, context, hookRef = null) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       failedCustomFeatureHashes.set(pack.id, runner.hash);
+      failedCustomFeatureErrors.set(pack.id, 'Pack JavaScript hook exceeded its 2 second time limit.');
       disposeCustomFeatureRunner(pack.id, 'Pack JavaScript hook exceeded its 2 second time limit.');
     }, 2000);
     runner.pending.set(id, { resolve, reject, timeout });
@@ -4994,7 +5002,7 @@ function callCustomFeatureHook(definition, hook, context, hookRef = null) {
   });
 }
 function callPackFeature(pack, entry, context) {
-  if (failedCustomFeatureHashes.get(pack.id) === customFeatureHash(pack.javascript.source)) {
+  if (failedCustomFeatureHashes.get(pack.id) === customFeatureRunnerHash(pack)) {
     return Promise.resolve(null);
   }
   const runner = createCustomFeatureRunner(pack);
@@ -5008,6 +5016,7 @@ function callPackFeature(pack, entry, context) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       failedCustomFeatureHashes.set(pack.id, runner.hash);
+      failedCustomFeatureErrors.set(pack.id, 'Pack JavaScript feature exceeded its 2 second time limit.');
       disposeCustomFeatureRunner(pack.id, 'Pack JavaScript feature exceeded its 2 second time limit.');
     }, 2000);
     runner.pending.set(id, { resolve, reject, timeout });
@@ -5885,6 +5894,7 @@ async function installCustomPackNow(pack, preparedDefinitions = null) {
   if (previous) disposeCustomFeatureRunner(pack.id, 'Pack was updated.');
   customPacksById.set(pack.id, pack);
   failedCustomFeatureHashes.delete(pack.id);
+  failedCustomFeatureErrors.delete(pack.id);
   for (const item of prepared) {
     registerCustomDefinition(item.definition, item.modelTemplate);
   }
