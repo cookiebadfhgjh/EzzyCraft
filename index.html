@@ -5784,9 +5784,10 @@ function validateCustomPack(pack, preparedDefinitions) {
   const featureNames = new Set();
   const itemKeys = new Set();
   const definitionIds = new Set();
+  let javascriptEntrySeen = false;
   for (const entry of pack.entries) {
-    if (!entry || !['item', 'block', 'service', 'feature'].includes(entry.type)) {
-      throw new Error('Pack entries must be items, blocks, services, or features.');
+    if (!entry || !['item', 'block', 'javascript', 'service', 'feature'].includes(entry.type)) {
+      throw new Error('Pack entries must be items, blocks, a shared JavaScript module, services, or features.');
     }
     if (entry.type === 'item' || entry.type === 'block') {
       if (!entry.definition || entry.definition.kind !== (entry.type === 'item' ? 'tool' : 'block')) {
@@ -5804,6 +5805,12 @@ function validateCustomPack(pack, preparedDefinitions) {
         throw new Error('Pack contains an invalid or duplicate service reference.');
       }
       serviceNames.add(entry.name);
+    } else if (entry.type === 'javascript') {
+      if (javascriptEntrySeen || typeof entry.name !== 'string' || !entry.name.trim() ||
+          !pack.javascript.source.trim()) {
+        throw new Error('Pack must contain at most one named, non-empty shared JavaScript module.');
+      }
+      javascriptEntrySeen = true;
     } else {
       if (typeof entry.name !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.name) || featureNames.has(entry.name) ||
           typeof entry.handler !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.handler) ||

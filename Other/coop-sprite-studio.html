@@ -88,10 +88,17 @@
     </div>
   </section>
   <section>
-    <h2>Item / block definition</h2>
+    <h2>Pack entry editor</h2>
+    <label for="kind">Entry type
+      <select id="kind">
+        <option value="tool">Tool / weapon</option>
+        <option value="block">Placeable block</option>
+        <option value="javascript">Pack-wide JavaScript module</option>
+      </select>
+    </label>
+    <label for="name">Entry name<input id="name" type="text" maxlength="48" value="New Tool"></label>
+    <div id="definition-fields">
     <div class="field-grid">
-      <label for="name">Display name<input id="name" type="text" maxlength="48" value="New Tool"></label>
-      <label for="kind">Definition type<select id="kind"><option value="tool">Tool / weapon</option><option value="block">Placeable block</option></select></label>
       <label for="registry-id">Numeric registry ID<input id="registry-id" type="number" min="30" max="65535" step="1" value="120"></label>
       <label for="registry-key">Internal key<input id="registry-key" type="text" maxlength="48" value="new_tool"></label>
       <label for="category">Creative/inventory category<input id="category" type="text" maxlength="32" value="tools"></label>
@@ -170,16 +177,19 @@
       <input id="mechanics" type="text" placeholder="example: magicSword">
     </label>
     <p class="hint">The key selects this entry's behavior from the pack-wide JavaScript module. Item behavior code is authored once in the pack module, not embedded in each item definition.</p>
+    </div>
+    <div id="javascript-fields" class="hidden">
     <h3>Pack-wide JavaScript module</h3>
     <label for="pack-script">JavaScript module
       <textarea id="pack-script" spellcheck="false" placeholder="({&#10;  services: {&#10;    playSound(game, api, event) { api.effects.playSound('pickup'); }&#10;  },&#10;  items: {&#10;    magicSword: { onUse(game, api, event) { api.services.playSound(); } }&#10;  },&#10;  features: {&#10;    chatListener(game, api, event) { if (event.message === 'hello') api.effects.playSound('pickup'); }&#10;  }&#10;})"></textarea>
     </label>
     <p class="hint">One module is shared by the whole pack: <code>services</code> are reusable code functions, <code>items</code> holds behavior keyed by the Pack behavior key, and <code>features</code> holds independent game-wide hooks. Built-in <code>game.services.rayTrace(maxDistance, maxHits)</code> returns ordered block and player hits and is available to all code, but is not editable.</p>
+    </div>
     <section class="mesh-box" aria-label="Definition pack">
       <h3 style="margin-top:0">Pack entries <span id="pack-count" class="muted">0 entries</span></h3>
       <label for="pack-name">Pack name<input id="pack-name" value="Co-op item pack"></label>
       <label for="pack-id">Shared pack ID<input id="pack-id" value="coop_item_pack"></label>
-      <p class="hint">A pack can contain items, blocks, shared JavaScript services, and independent features such as chat listeners. Add the current item/block, or add a service/feature reference to the pack module.</p>
+      <p class="hint">Choose Tool, Placeable block, or Pack-wide JavaScript module from the entry type menu. A pack has one shared JavaScript module, plus any items, blocks, services, and independent features that use it.</p>
       <div id="pack-items" class="muted">No items in the pack.</div>
       <div class="field-grid">
         <label for="service-name">JavaScript service name<input id="service-name" placeholder="playSound"></label>
@@ -190,7 +200,7 @@
         <button type="button" id="pack-add-feature">Add feature entry</button>
       </div>
       <div class="actions">
-        <button type="button" id="pack-add">Add current item/block</button>
+        <button type="button" id="pack-add">Add current entry to pack</button>
         <button type="button" id="pack-remove">Remove last</button>
         <button type="button" id="pack-clear">Clear pack</button>
           <button type="button" id="download-pack" class="primary">Export pack JSON</button>
@@ -229,6 +239,7 @@
   let lastKind = $('kind').value;
   const packDefinitions = [];
   const packScriptEntries = [];
+  let packModuleDraft = '';
   const MAX_MESH_BYTES = 20 * 1024 * 1024;
 
   function pushHistory() {
@@ -369,23 +380,42 @@
     document.querySelectorAll('.swatch').forEach(el => el.classList.remove('selected'));
   });
   $('kind').addEventListener('change', () => {
-    const isTool = $('kind').value === 'tool';
-    if ($('name').value === (lastKind === 'tool' ? 'New Tool' : 'New Block')) {
-      $('name').value = isTool ? 'New Tool' : 'New Block';
+    const kind = $('kind').value;
+    const isTool = kind === 'tool';
+    const isJavaScript = kind === 'javascript';
+    const oldDefaultName = lastKind === 'tool' ? 'New Tool' :
+      lastKind === 'block' ? 'New Block' : 'Pack-wide JavaScript';
+    if ($('name').value === oldDefaultName) {
+      $('name').value = isJavaScript ? 'Pack-wide JavaScript' : isTool ? 'New Tool' : 'New Block';
     }
-    lastKind = $('kind').value;
+    lastKind = kind;
+    $('definition-fields').classList.toggle('hidden', isJavaScript);
+    $('javascript-fields').classList.toggle('hidden', !isJavaScript);
     $('tool-fields').classList.toggle('hidden', !isTool);
-    $('block-fields').classList.toggle('hidden', isTool);
-    $('registry-id').value = String(nextFreeId($('kind').value));
-    $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
-    $('category').value = isTool ? 'tools' : 'building';
-    $('atlas-index').value = String(nextFreeTile());
+    $('block-fields').classList.toggle('hidden', isTool || isJavaScript);
+    $('pack-script').value = packModuleDraft;
+    $('pack-add').textContent = isJavaScript ? 'Add JavaScript module to pack' : 'Add current item/block';
+    if (!isJavaScript) {
+      $('registry-id').value = String(nextFreeId(kind));
+      $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+      $('category').value = isTool ? 'tools' : 'building';
+      $('atlas-index').value = String(nextFreeTile());
+    }
+    $('export').disabled = isJavaScript;
+    $('download-json').disabled = isJavaScript;
+    $('download-js').disabled = isJavaScript;
     updateDefinitionPreview();
   });
   $('name').addEventListener('input', () => {
     if (!$('registry-key').dataset.edited) {
       $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
     }
+  });
+  $('pack-script').addEventListener('input', () => {
+    packModuleDraft = $('pack-script').value;
+    const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
+    if (moduleEntry) moduleEntry.source = packModuleDraft;
+    updateDefinitionPreview();
   });
   $('registry-key').addEventListener('input', () => { $('registry-key').dataset.edited = 'true'; });
   $('recipe-type').addEventListener('change', updateRecipeFields);
@@ -528,6 +558,9 @@
   }
   function makeDefinition() {
     const kind = $('kind').value;
+    if (kind !== 'tool' && kind !== 'block') {
+      throw new Error('Select a tool or block to export an item definition.');
+    }
     const mechanics = $('mechanics').value;
     if (mechanics && !/^[a-zA-Z_$][\w$]*$/.test(mechanics)) {
       throw new Error('Pack behavior key must be a valid JavaScript identifier.');
@@ -625,6 +658,13 @@
   }
   function updateDefinitionPreview() {
     if (!$('definition-preview')) return;
+    if ($('kind').value === 'javascript') {
+      $('definition-preview').textContent = packScriptEntries.some(entry => entry.type === 'javascript')
+        ? 'Pack-wide JavaScript module: ' + ($('name').value.trim() || 'Pack-wide JavaScript')
+        : 'Write the shared module, then add it to the pack.';
+      $('message').textContent = '';
+      return;
+    }
     try {
       $('definition-preview').textContent = JSON.stringify(makeDefinition(), null, 2);
       $('message').textContent = '';
@@ -758,7 +798,8 @@
     ];
     $('pack-count').textContent = entries.length + (entries.length === 1 ? ' entry' : ' entries');
     $('pack-items').textContent = entries.length
-      ? entries.map(entry => entry.type + ': ' + entry.name + (entry.detail ? ' (' + entry.detail + ')' : '')).join(' · ')
+      ? entries.map(entry => (entry.type === 'javascript' ? 'JavaScript module' : entry.type) +
+        ': ' + entry.name + (entry.detail ? ' (' + entry.detail + ')' : '')).join(' · ')
       : 'No entries in the pack.';
   }
   function clearForNextPackItem() {
@@ -789,6 +830,28 @@
   }
   $('pack-add').addEventListener('click', () => {
     try {
+      if ($('kind').value === 'javascript') {
+        const source = $('pack-script').value.trim();
+        if (!source) throw new Error('Write the pack-wide JavaScript module before adding it.');
+        if (source.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
+        new Function('return (' + source + ');');
+        packModuleDraft = source;
+        const existing = packScriptEntries.find(entry => entry.type === 'javascript');
+        if (existing) {
+          existing.name = $('name').value.trim() || 'Pack-wide JavaScript';
+          existing.source = source;
+        } else {
+          packScriptEntries.push({
+            type: 'javascript',
+            name: $('name').value.trim() || 'Pack-wide JavaScript',
+            source,
+          });
+        }
+        renderPack();
+        updateDefinitionPreview();
+        $('message').textContent = 'Pack-wide JavaScript module added to the pack.';
+        return;
+      }
       if (packDefinitions.length >= 74) throw new Error('The pack has used all 74 custom texture tiles (54–127).');
       const definition = makeDefinition();
       if (packDefinitions.some(entry => entry.registry.id === definition.registry.id)) throw new Error('This registry ID is already in the pack.');
@@ -835,6 +898,14 @@
     $('message').textContent = 'Independent feature entry added. Define its handler in the pack-wide module under features.';
   });
   $('pack-remove').addEventListener('click', () => {
+    if (packScriptEntries.length) {
+      const removed = packScriptEntries.pop();
+      if (removed.type === 'javascript') packModuleDraft = '';
+      renderPack();
+      $('message').textContent = removed.name + ' removed from the pack.';
+      updateDefinitionPreview();
+      return;
+    }
     if (!packDefinitions.length) return;
     const removed = packDefinitions.pop();
     renderPack();
@@ -844,13 +915,16 @@
   $('pack-clear').addEventListener('click', () => {
     packDefinitions.length = 0;
     packScriptEntries.length = 0;
+    packModuleDraft = '';
+    $('pack-script').value = '';
     renderPack();
     $('message').textContent = 'Pack cleared.';
     updateDefinitionPreview();
   });
   $('download-pack').addEventListener('click', () => {
     try {
-      const javascript = $('pack-script').value.trim();
+      const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
+      const javascript = moduleEntry ? moduleEntry.source.trim() : '';
       if (!packDefinitions.length && !packScriptEntries.length) throw new Error('Add at least one entry to the pack first.');
       if (javascript.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
       if (javascript) new Function('return (' + javascript + ');');
@@ -862,7 +936,9 @@
         name: $('pack-name').value.trim() || 'Co-op item pack',
         entries: [
           ...packDefinitions.map(definition => ({ type: definition.kind === 'tool' ? 'item' : 'block', definition })),
-          ...packScriptEntries,
+          ...packScriptEntries.map(entry => entry.type === 'javascript'
+            ? { type: 'javascript', name: entry.name }
+            : entry),
         ],
         javascript: { runtime: 'coop1.10.pack-javascript.v1', source: javascript },
       };
