@@ -883,12 +883,16 @@ func startNgrok(port, domain string) {
 // ---------------------------------------------------------------- main
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
+	defaultAddr := ":8080"
+	if port := os.Getenv("PORT"); port != "" {
+		defaultAddr = ":" + port
+	}
+	addr := flag.String("addr", defaultAddr, "listen address")
 	seedFlag := flag.Int64("seed", 0, "world seed, integer (0 = random); only used when creating a new world")
 	mode := flag.String("mode", "survival", "survival or creative; only used when creating a new world")
 	pvp := flag.Bool("pvp", false, "PvP on at start; only used when creating a new world")
 	save := flag.String("save", "world.mcsrv.json", "world save file")
-	operatorCode := flag.String("op-code", "", "server operator code; required to unlock in-game server settings")
+	operatorCode := flag.String("op-code", os.Getenv("EZZYCRAFT_OP_CODE"), "server operator code; required to unlock in-game server settings (or set EZZYCRAFT_OP_CODE)")
 	definitionsDir := flag.String("definitions-dir", filepath.Join("server_data", "definitions"), "folder for shared item/block JSON definitions")
 	useNgrok := flag.Bool("ngrok", false, "start an ngrok tunnel and print the public URL")
 	ngrokDomain := flag.String("ngrok-domain", "", "optional reserved ngrok domain, e.g. my-name.ngrok-free.app")
