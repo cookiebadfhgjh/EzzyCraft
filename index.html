@@ -4817,9 +4817,17 @@ function createCustomFeatureRunner(pack) {
             if (entry.type === 'feature' && typeof module.features[entry.handler] !== 'function') {
               throw new Error('Pack feature handler "' + entry.handler + '" is missing from the shared module.');
             }
-            if ((entry.type === 'item' || entry.type === 'block') && entry.behaviorKey &&
-                (!module.items[entry.behaviorKey] || typeof module.items[entry.behaviorKey] !== 'object')) {
-              throw new Error('Pack item behavior "' + entry.behaviorKey + '" is missing from the shared module.');
+            if ((entry.type === 'item' || entry.type === 'block') && entry.behaviorKey) {
+              const behavior = module.items[entry.behaviorKey];
+              if (behavior === undefined) {
+                throw new Error('Pack item behavior "' + entry.behaviorKey +
+                  '" was not found under items in the shared module. Available item keys: ' +
+                  (Object.keys(module.items).join(', ') || 'none') + '.');
+              }
+              if (behavior === null || (typeof behavior !== 'function' && typeof behavior !== 'object')) {
+                throw new Error('Pack item behavior "' + entry.behaviorKey +
+                  '" under items must be a function or an object of hook functions.');
+              }
             }
           }
           postMessage({ type: 'ready', id: itemId });

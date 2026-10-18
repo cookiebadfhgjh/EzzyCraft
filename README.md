@@ -164,7 +164,7 @@ items: {
 
 ### Pack-wide JavaScript, services, and features
 
-A pack has one module with `items`, `services`, and `features` maps. Select **Pack-wide JavaScript module**, write the module, and choose **Add JavaScript module to pack**. It appears in the pack entry list; switching entry types preserves the draft. The module source is exported once as `javascript.source`; the `javascript` entry in the pack manifest identifies it as a pack entry, it is not duplicated per item. JavaScript service entries refer to functions under `services`. Independent feature entries refer to functions under `features` and can listen for:
+A pack has one module with `items`, `services`, and `features` maps. Select **Pack-wide JavaScript module**, write the module, and choose **Add JavaScript module to pack**. It appears in the pack entry list; switching entry types preserves the draft. The module source is exported once as `javascript.source`; the `javascript` entry in the pack manifest identifies it as a pack entry, it is not duplicated per item. An item's behavior key must exactly match a key under `items` (including capitalization); that value can be either one function handling the item's hooks or an object of named hook functions. JavaScript service entries refer to functions under `services`. Independent feature entries refer to functions under `features` and can listen for:
 
 - `onChat`: `event.sender`, `event.message`, and `event.senderPlayer`.
 - `onTick`: elapsed tick time in `event.dt`.
