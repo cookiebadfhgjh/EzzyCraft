@@ -8,7 +8,7 @@ Build the server with `build.bat`, then start it with an operator code:
 .\mcserver.exe -op-code "your-private-code"
 ```
 
-Open the server address in a browser. If you use a separate game page, enter the target server address in **Join Online Game** before opening **Options...**; operator settings and imports use the connected server or that address. Enter the operator code and choose **Unlock Server Settings** to import item, block, or complete pack JSON files. Without `-op-code`, server settings and imports remain disabled.
+Open the server address in a browser. If you use a separate game page, enter the target server address in **Join Online Game** before opening **Options...**; operator settings and imports use the connected server or that address. Enter the operator code and choose **Unlock Server Settings** to import item, block, or complete pack JSON files. The server pack dashboard lists every shared pack and whether it is active or failed to load; **Refresh / Load** reloads all server packs together. Multiple packs stay active at once when they have different pack IDs and non-conflicting item/block IDs and texture tiles. Without `-op-code`, server settings and imports remain disabled.
 
 The unlocked server settings also let an operator set the shared game mode, world time, and PvP. The first player to join is a chat operator; operators can promote other players with `/op <player>`.
 

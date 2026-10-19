@@ -348,6 +348,20 @@
   #room-code { font-size: 30px; font-weight: 800; letter-spacing: 8px; color: #9fe870; cursor: pointer; margin: 4px 0; }
   #room-players { font-size: 11.5px; opacity: .8; line-height: 1.5; }
   #btn-pvp-toggle { margin-top: 8px; }
+  #server-pack-dashboard { display: grid; gap: 8px; padding: 10px;
+    border: 1px solid rgba(159,232,112,.35); background: rgba(0,0,0,.3); }
+  #server-pack-dashboard .pack-dashboard-heading { display: flex; align-items: center;
+    justify-content: space-between; gap: 8px; font-size: 11px; letter-spacing: 1px; }
+  #server-pack-dashboard .mc-btn { width: auto; max-width: none; padding: 5px 8px; font-size: 10px; }
+  #server-pack-list { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; }
+  .server-pack-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px;
+    padding: 8px; border: 1px solid rgba(255,255,255,.16); background: rgba(0,0,0,.25);
+    text-align: left; font-size: 10px; }
+  .server-pack-card .pack-name { overflow-wrap: anywhere; font-weight: 700; color: #fff; }
+  .server-pack-card .pack-id, .server-pack-card .pack-details { opacity: .7; overflow-wrap: anywhere; }
+  .server-pack-card .pack-state { color: #9fe870; font-weight: 700; white-space: nowrap; }
+  .server-pack-card .pack-state.error { color: #ff9b8c; }
+  #server-pack-empty { font-size: 10px; opacity: .7; text-align: center; padding: 8px; }
 </style>
 </head>
 <body>
@@ -512,6 +526,15 @@
         <button class="mc-btn" id="btn-server-settings-unlock">Unlock Server Settings</button>
         <div class="form" id="server-settings-tools" style="display:none">
           <button class="mc-btn accent" id="btn-import-definition">Import Item / Block / Pack</button>
+          <section id="server-pack-dashboard" aria-label="Server pack dashboard">
+            <div class="pack-dashboard-heading">
+              <span>SERVER PACKS <span id="server-pack-count">0</span></span>
+              <button type="button" class="mc-btn" id="btn-refresh-server-packs">Refresh / Load</button>
+            </div>
+            <div id="server-pack-list" aria-live="polite">
+              <div id="server-pack-empty">Refresh to load the server pack list.</div>
+            </div>
+          </section>
           <label for="server-game-mode">SERVER GAME MODE</label>
           <select class="mc-input" id="server-game-mode">
             <option value="survival">Survival</option>
@@ -4042,6 +4065,7 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
       ids.add(id);
       tiles.add(tile);
       assertCustomDefinitionAvailable(prepared.definition);
+      if (isPack) assertCustomPackDefinitionOwnership(prepared.definition, source.id);
       preparedDefinitions.push(prepared);
     }
     if (isPack) validateCustomPack(source, preparedDefinitions);
@@ -4089,6 +4113,10 @@ document.getElementById('definition-file-input').addEventListener('change', asyn
         throw new Error('Imported ' + imported + ' item/block definitions, but the shared pack could not be saved: ' +
           (await response.text() || response.statusText));
       }
+      serverSharedPacksById.set(source.id, source);
+      serverPackLoadErrors.delete(source.id);
+      serverPackDashboardMessage = '';
+      renderServerPackDashboard();
       await installCustomPack(source, preparedDefinitions);
     }
     renderHotbar();
@@ -4591,6 +4619,12 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
     serverOperatorCode = code;
     serverOperatorAddress = addr;
     document.getElementById('server-settings-tools').style.display = 'flex';
+    void loadServerPacks(addr).then(({ failures }) => {
+      if (failures) toast(failures + ' server pack(s) could not be loaded. Check the pack dashboard.', true);
+    }).catch(loadError => {
+      console.error('Could not load the server pack dashboard:', loadError);
+      toast('Could not load the server pack dashboard: ' + loadError.message, true);
+    });
     toast('Server settings unlocked.');
   } catch (error) {
     serverOperatorCode = '';
@@ -4598,6 +4632,25 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
     document.getElementById('server-settings-tools').style.display = 'none';
     console.error('Could not unlock server settings:', error);
     toast('Could not unlock server settings: ' + error.message, true);
+  }
+};
+document.getElementById('btn-refresh-server-packs').onclick = async () => {
+  if (!serverOperatorAddress) {
+    toast('Unlock Server Settings first.', true);
+    return;
+  }
+  const button = document.getElementById('btn-refresh-server-packs');
+  button.disabled = true;
+  try {
+    const { total, failures } = await loadServerPacks(serverOperatorAddress);
+    toast(failures
+      ? 'Loaded ' + (total - failures) + ' of ' + total + ' server packs. Check the dashboard for errors.'
+      : (total ? 'Loaded ' + total + ' server pack(s).' : 'No shared server packs are installed.'));
+  } catch (error) {
+    console.error('Could not refresh the server pack dashboard:', error);
+    toast('Could not refresh server packs: ' + error.message, true);
+  } finally {
+    button.disabled = false;
   }
 };
 document.getElementById('btn-server-settings-apply').onclick = async () => {
@@ -4844,12 +4897,69 @@ const customFeatureActionBudgets = new Map();
 const failedCustomFeatureHashes = new Map();
 const failedCustomFeatureErrors = new Map();
 const customPacksById = new Map();
+const serverSharedPacksById = new Map();
+const serverPackLoadErrors = new Map();
 const customPackInstallPromises = new Map();
 const customPackEventQueues = new Map();
 const customPackEventBusy = new Set();
+let serverPackDashboardMessage = '';
 let customFeatureHealthEffectAt = -Infinity;
 let customFeaturePermissionNoticeAt = -Infinity;
 let customFeatureCallId = 0;
+function renderServerPackDashboard() {
+  const count = document.getElementById('server-pack-count');
+  const list = document.getElementById('server-pack-list');
+  if (!count || !list) return;
+  const packs = [...serverSharedPacksById.values()].sort((a, b) => a.id.localeCompare(b.id));
+  count.textContent = String(packs.length);
+  list.replaceChildren();
+  if (!packs.length) {
+    const empty = document.createElement('div');
+    empty.id = 'server-pack-empty';
+    empty.textContent = serverPackDashboardMessage || 'No server packs are installed.';
+    list.append(empty);
+    return;
+  }
+  for (const pack of packs) {
+    const card = document.createElement('div');
+    card.className = 'server-pack-card';
+    const name = document.createElement('div');
+    name.className = 'pack-name';
+    name.textContent = typeof pack.name === 'string' && pack.name.trim() ? pack.name : pack.id;
+    const status = document.createElement('div');
+    status.className = 'pack-state';
+    const error = serverPackLoadErrors.get(pack.id);
+    if (error) {
+      status.textContent = 'LOAD ERROR';
+      status.classList.add('error');
+      status.title = error;
+    } else {
+      status.textContent = customPacksById.has(pack.id) ? 'ACTIVE' : 'NOT LOADED';
+    }
+    const id = document.createElement('div');
+    id.className = 'pack-id';
+    id.textContent = pack.id;
+    const entries = Array.isArray(pack.entries) ? pack.entries : [];
+    const countTypes = type => entries.filter(entry => entry && entry.type === type).length;
+    const details = document.createElement('div');
+    details.className = 'pack-details';
+    details.textContent = [
+      countTypes('item') + ' items',
+      countTypes('block') + ' blocks',
+      countTypes('service') + ' services',
+      countTypes('feature') + ' features',
+      countTypes('javascript') + ' module entries',
+    ].join(' · ');
+    card.append(name, status, id, details);
+    list.append(card);
+  }
+  if (serverPackDashboardMessage) {
+    const message = document.createElement('div');
+    message.id = 'server-pack-empty';
+    message.textContent = serverPackDashboardMessage;
+    list.append(message);
+  }
+}
 function customFeatureHash(source) {
   let hash = 2166136261;
   const combined = source;
@@ -5880,6 +5990,13 @@ function assertCustomDefinitionAvailable(definition) {
     throw new Error('Atlas tile ' + tile + ' is already assigned to another imported definition.');
   }
 }
+function assertCustomPackDefinitionOwnership(definition, packId) {
+  const existing = customDefinitionsById.get(definition.registry.id);
+  if (existing && existing.packId && existing.packId !== packId) {
+    throw new Error('Registry ID ' + definition.registry.id + ' is already used by pack "' +
+      existing.packId + '". Choose a different item/block ID for pack "' + packId + '".');
+  }
+}
 function registerCustomDefinition(definition, modelTemplate) {
   assertCustomDefinitionAvailable(definition);
   const id = definition.registry.id;
@@ -6092,6 +6209,10 @@ async function installCustomPackNow(pack, preparedDefinitions = null) {
     }
   }
   validateCustomPack(pack, prepared);
+  for (const item of prepared) {
+    assertCustomDefinitionAvailable(item.definition);
+    assertCustomPackDefinitionOwnership(item.definition, pack.id);
+  }
   for (const item of prepared) item.definition.packId = pack.id;
   const runner = createCustomFeatureRunner(pack);
   await runner.readyPromise;
@@ -6100,9 +6221,11 @@ async function installCustomPackNow(pack, preparedDefinitions = null) {
   customPacksById.set(pack.id, pack);
   failedCustomFeatureHashes.delete(pack.id);
   failedCustomFeatureErrors.delete(pack.id);
+  serverPackLoadErrors.delete(pack.id);
   for (const item of prepared) {
     registerCustomDefinition(item.definition, item.modelTemplate);
   }
+  renderServerPackDashboard();
   renderHotbar();
   if (inventoryOpen) renderInventory();
   return pack;
@@ -6125,6 +6248,45 @@ async function restoreCustomDefinitions() {
   }
 }
 await restoreCustomDefinitions();
+async function loadServerPacks(addr) {
+  serverPackDashboardMessage = 'Loading server packs...';
+  renderServerPackDashboard();
+  let packs;
+  try {
+    const response = await fetch(serverApiUrl('/api/packs', addr));
+    if (!response.ok) throw new Error(await response.text() || 'Could not load shared server packs.');
+    packs = await response.json();
+    if (!Array.isArray(packs) ||
+        packs.some(pack => !pack || typeof pack.id !== 'string' || !/^[a-z][a-z0-9_-]{0,63}$/.test(pack.id))) {
+      throw new Error('The server returned an invalid pack list.');
+    }
+    if (new Set(packs.map(pack => pack.id)).size !== packs.length) {
+      throw new Error('The server returned duplicate pack IDs.');
+    }
+  } catch (error) {
+    serverPackDashboardMessage = 'Could not load server packs: ' + error.message;
+    renderServerPackDashboard();
+    throw error;
+  }
+  serverSharedPacksById.clear();
+  serverPackLoadErrors.clear();
+  for (const pack of packs) serverSharedPacksById.set(pack.id, pack);
+  serverPackDashboardMessage = '';
+  renderServerPackDashboard();
+  let failures = 0;
+  for (const pack of packs) {
+    try {
+      await installCustomPack(pack);
+    } catch (error) {
+      failures++;
+      serverPackLoadErrors.set(pack.id, error.message);
+      console.error('Could not install a shared server pack:', error);
+      renderServerPackDashboard();
+    }
+  }
+  renderServerPackDashboard();
+  return { total: packs.length, failures };
+}
 async function loadServerCustomDefinitions(addr) {
   const response = await fetch(serverApiUrl('/api/definitions', addr));
   if (!response.ok) throw new Error(await response.text() || 'Could not load shared server definitions.');
@@ -6145,21 +6307,7 @@ async function loadServerCustomDefinitions(addr) {
       console.error('Could not install a shared server definition:', error);
     }
   }
-  try {
-    const response = await fetch(serverApiUrl('/api/packs', addr));
-    if (!response.ok) throw new Error(await response.text() || 'Could not load shared server packs.');
-    const packs = await response.json();
-    if (!Array.isArray(packs)) throw new Error('The server returned an invalid pack list.');
-    for (const pack of packs) {
-      try {
-        await installCustomPack(pack);
-      } catch (error) {
-        console.error('Could not install a shared server pack:', error);
-      }
-    }
-  } catch (error) {
-    console.warn('Shared JavaScript packs are unavailable:', error);
-  }
+  await loadServerPacks(addr);
 }
 async function installSharedDefinition(source, notify = true) {
   const prepared = await prepareCustomDefinition(source);
@@ -7126,7 +7274,17 @@ function guestHandle(d) {
       });
       break;
     case 'pack':
-      void installCustomPack(d.pack).catch(error => {
+      if (d.pack && typeof d.pack.id === 'string') {
+        serverSharedPacksById.set(d.pack.id, d.pack);
+        serverPackDashboardMessage = '';
+        renderServerPackDashboard();
+      }
+      void installCustomPack(d.pack).then(() => {
+        if (d.pack && typeof d.pack.id === 'string') serverPackLoadErrors.delete(d.pack.id);
+        renderServerPackDashboard();
+      }).catch(error => {
+        if (d.pack && typeof d.pack.id === 'string') serverPackLoadErrors.set(d.pack.id, error.message);
+        renderServerPackDashboard();
         console.error('Could not install a shared JavaScript pack:', error);
         toast('Could not install a shared JavaScript pack: ' + error.message, true);
       });

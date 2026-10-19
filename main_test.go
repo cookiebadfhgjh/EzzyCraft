@@ -402,7 +402,7 @@ func TestHandleDefinitionsRequiresCodeAndPersists(t *testing.T) {
 
 func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 	dir := t.TempDir()
-	recipient := &player{send: make(chan []byte, 2)}
+	recipient := &player{send: make(chan []byte, 4)}
 	s := &server{
 		packsDir:     dir,
 		operatorCode: "test-code",
@@ -431,10 +431,24 @@ func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 		t.Fatalf("pack file was not saved: %v", err)
 	}
 
+	secondPack := strings.Replace(pack, `"test_pack"`, `"second_pack"`, 1)
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/packs", strings.NewReader(secondPack))
+	secondRequest.Header.Set("X-Server-Op-Code", "test-code")
+	secondResponse := httptest.NewRecorder()
+	s.handlePacks(secondResponse, secondRequest)
+	if secondResponse.Code != http.StatusNoContent {
+		t.Fatalf("second authorized POST status = %d, want %d: %s", secondResponse.Code, http.StatusNoContent, secondResponse.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "second_pack.json")); err != nil {
+		t.Fatalf("second pack file was not saved independently: %v", err)
+	}
+
 	getResponse := httptest.NewRecorder()
 	s.handlePacks(getResponse, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
-	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"id":"test_pack"`) {
-		t.Fatalf("GET response = %d %q, want persisted pack", getResponse.Code, getResponse.Body.String())
+	if getResponse.Code != http.StatusOK ||
+		!strings.Contains(getResponse.Body.String(), `"id":"test_pack"`) ||
+		!strings.Contains(getResponse.Body.String(), `"id":"second_pack"`) {
+		t.Fatalf("GET response = %d %q, want both independently persisted packs", getResponse.Code, getResponse.Body.String())
 	}
 }
 
