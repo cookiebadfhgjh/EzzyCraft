@@ -5338,6 +5338,7 @@ async function runCustomFeatureHook(definition, hook, context, hookRef = null) {
   }
 }
 const customProjectiles = [];
+let customProjectileSequence = 0;
 const customProjectileCoreGeometry = new THREE.SphereGeometry(0.2, 12, 8);
 const customProjectileGlowGeometry = new THREE.SphereGeometry(0.42, 12, 8);
 const customProjectileTrailGeometry = new THREE.CylinderGeometry(0.025, 0.12, 1.15, 8, 1, true);
@@ -5350,20 +5351,24 @@ const customProjectileTrailMaterial = new THREE.MeshBasicMaterial({
   color: 0xffff62, transparent: true, opacity: 0.8,
   blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
 });
-function spawnCustomProjectile(definition, options, hookRef = null) {
+function spawnCustomProjectile(definition, options, hookRef = null, replicated = null) {
   if (customProjectiles.length >= 128) return;
-  const speed = Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
-  const lifetime = Number.isFinite(options.lifetime) ? Math.max(0.1, Math.min(30, options.lifetime)) : 5;
-  const origin = camera.position.clone();
+  const speed = replicated ? replicated.speed :
+    Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
+  const lifetime = replicated ? replicated.lifetime :
+    Number.isFinite(options.lifetime) ? Math.max(0.1, Math.min(30, options.lifetime)) : 5;
+  const origin = replicated ? new THREE.Vector3(replicated.x, replicated.y, replicated.z) : camera.position.clone();
   const direction = new THREE.Vector3();
-  if (options.direction && [options.direction.x, options.direction.y, options.direction.z].every(Number.isFinite)) {
+  if (replicated) {
+    direction.set(replicated.dx, replicated.dy, replicated.dz);
+  } else if (options.direction && [options.direction.x, options.direction.y, options.direction.z].every(Number.isFinite)) {
     direction.set(options.direction.x, options.direction.y, options.direction.z);
   } else {
     camera.getWorldDirection(direction);
   }
   if (direction.lengthSq() < 1e-8) return;
   direction.normalize();
-  if (options.origin && [options.origin.x, options.origin.y, options.origin.z].every(Number.isFinite)) {
+  if (!replicated && options.origin && [options.origin.x, options.origin.y, options.origin.z].every(Number.isFinite)) {
     const requested = new THREE.Vector3(options.origin.x, options.origin.y, options.origin.z);
     if (requested.distanceTo(origin) <= 8) origin.copy(requested);
   }
@@ -5376,23 +5381,95 @@ function spawnCustomProjectile(definition, options, hookRef = null) {
   mesh.position.copy(origin);
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
   scene.add(mesh);
-  customProjectiles.push({
+  const projectile = {
     definition, hookRef, mesh, position: origin, direction, speed, lifetime, age: 0,
-    damage: Number.isFinite(options.damage) ? Math.max(0, Math.min(20, options.damage)) : 0,
-  });
+    damage: replicated ? replicated.projectileDamage :
+      Number.isFinite(options.damage) ? Math.max(0, Math.min(20, options.damage)) : 0,
+    projectileId: replicated ? replicated.projectileId : 0,
+    clientId: replicated ? replicated.clientId : '',
+    owner: replicated ? replicated.owner : NET.role ? NET.selfId : 0,
+    netTarget: null, netUpdateAt: 0,
+  };
+  customProjectiles.push(projectile);
+  if (!replicated && NET.role && NET.hostConn && NET.hostConn.open) {
+    projectile.clientId = NET.selfId + ':' + (++customProjectileSequence);
+    NET.hostConn.send({
+      t: 'projectile-spawn', clientId: projectile.clientId,
+      packId: definition.packId || ('legacy_' + definition.registry.id),
+      projectileItem: definition.registry.id,
+      hookScope: hookRef && hookRef.scope === 'feature' ? 'feature' : 'item',
+      hookKey: hookRef && hookRef.key || definition.mechanics && definition.mechanics.unique || '',
+      x: origin.x, y: origin.y, z: origin.z,
+      dx: direction.x, dy: direction.y, dz: direction.z,
+      speed, lifetime, projectileDamage: projectile.damage,
+    });
+  }
+  return projectile;
 }
-function removeCustomProjectile(index) {
+function removeCustomProjectile(index, notifyServer = true) {
   const [projectile] = customProjectiles.splice(index, 1);
-  if (projectile) scene.remove(projectile.mesh);
+  if (!projectile) return;
+  scene.remove(projectile.mesh);
+  if (notifyServer && projectile.owner === NET.selfId && NET.role && NET.hostConn && NET.hostConn.open) {
+    NET.hostConn.send({
+      t: 'projectile-remove',
+      projectileId: projectile.projectileId,
+      clientId: projectile.clientId,
+    });
+  }
 }
 function clearCustomProjectiles() {
   for (const projectile of customProjectiles) scene.remove(projectile.mesh);
   customProjectiles.length = 0;
 }
+function applyNetProjectile(message) {
+  if (!Number.isSafeInteger(message.projectileId) || message.projectileId < 1 ||
+      !Number.isInteger(message.owner) || !Number.isInteger(message.projectileItem) ||
+      ![message.x, message.y, message.z, message.dx, message.dy, message.dz,
+        message.speed, message.lifetime, message.projectileDamage].every(Number.isFinite)) return;
+  let projectile = customProjectiles.find(item =>
+    item.projectileId === message.projectileId ||
+    (item.owner === NET.selfId && item.clientId && item.clientId === message.clientId));
+  if (!projectile) {
+    const definition = customDefinitionsById.get(message.projectileItem) || {
+      name: 'Shared projectile', kind: 'tool', packId: message.packId,
+      registry: { id: message.projectileItem }, mechanics: { unique: message.hookKey },
+    };
+    const hookRef = { scope: message.hookScope, key: message.hookKey };
+    projectile = spawnCustomProjectile(definition, {}, hookRef, message);
+    if (!projectile) return;
+  }
+  projectile.projectileId = message.projectileId;
+  projectile.clientId = message.clientId || projectile.clientId;
+  projectile.owner = message.owner;
+  projectile.netTarget = message.owner === NET.selfId
+    ? null : new THREE.Vector3(message.x, message.y, message.z);
+  projectile.age = Math.max(projectile.age, Number.isFinite(message.age) ? message.age : 0);
+}
+function applyNetProjectileUpdate(message) {
+  const projectile = customProjectiles.find(item => item.projectileId === message.projectileId);
+  if (!projectile || projectile.owner === NET.selfId ||
+      ![message.x, message.y, message.z, message.age].every(Number.isFinite)) return;
+  projectile.age = Math.max(projectile.age, message.age);
+  projectile.netTarget = new THREE.Vector3(message.x, message.y, message.z);
+}
 function updateCustomProjectiles(dt) {
   for (let i = customProjectiles.length - 1; i >= 0; i--) {
     const projectile = customProjectiles[i];
     projectile.age += dt;
+    if (NET.role && projectile.owner !== NET.selfId) {
+      if (projectile.netTarget) {
+        projectile.position.lerp(projectile.netTarget, Math.min(1, dt * 16));
+        if (projectile.position.distanceToSquared(projectile.netTarget) < 0.0004) {
+          projectile.netTarget = null;
+        }
+      } else {
+        projectile.position.addScaledVector(projectile.direction, projectile.speed * dt);
+      }
+      projectile.mesh.position.copy(projectile.position);
+      if (projectile.age >= projectile.lifetime + 1) removeCustomProjectile(i, false);
+      continue;
+    }
     if (projectile.age >= projectile.lifetime) {
       removeCustomProjectile(i);
       continue;
@@ -5440,6 +5517,15 @@ function updateCustomProjectiles(dt) {
     }
     projectile.position.addScaledVector(projectile.direction, step);
     projectile.mesh.position.copy(projectile.position);
+    if (NET.role && projectile.projectileId && projectile.age - projectile.netUpdateAt >= 0.1 &&
+        NET.hostConn && NET.hostConn.open) {
+      projectile.netUpdateAt = projectile.age;
+      NET.hostConn.send({
+        t: 'projectile-update', projectileId: projectile.projectileId,
+        x: projectile.position.x, y: projectile.position.y, z: projectile.position.z,
+        age: projectile.age,
+      });
+    }
   }
 }
 function getCustomRayTraceHits(maxDistance = 64, maxHits = 64, origin = camera.position, direction = null) {
@@ -6574,7 +6660,7 @@ function updateDayNight() {
    chunked world: guests re-generate terrain from the seed and
    then apply a sparse edit-log the host diffs from dirty chunks.
    ============================================================ */
-const NET_VERSION = 4;          // must match the Go server
+const NET_VERSION = 5;          // must match the Go server
 const MAX_PLAYERS = 8;
 const EDIT_CHUNK  = 48000;
 function defaultServerAddr() {
@@ -7072,6 +7158,23 @@ function guestHandle(d) {
       if (inventoryOpen) renderInventory();
       if (remaining > 0) spawnDrop(player.pos.x, player.pos.y + 1, player.pos.z, d.item, remaining);
       else playSFX('pickup');
+      break;
+    }
+    case 'projectile-add':
+      applyNetProjectile(d);
+      break;
+    case 'projectile-update':
+      applyNetProjectileUpdate(d);
+      break;
+    case 'projectile-remove': {
+      const index = customProjectiles.findIndex(projectile => projectile.projectileId === d.projectileId);
+      if (index >= 0) removeCustomProjectile(index, false);
+      break;
+    }
+    case 'projectile-denied': {
+      const index = customProjectiles.findIndex(projectile => projectile.clientId === d.clientId);
+      if (index >= 0) removeCustomProjectile(index, false);
+      toast('The server could not share that projectile.', true);
       break;
     }
     case 'pvp-mode':

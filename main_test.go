@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOperatorCommandsUpdateSharedWorld(t *testing.T) {
@@ -500,22 +501,93 @@ func TestJoiningPlayerReceivesExistingSharedDrops(t *testing.T) {
 		drops: map[uint64]*worldDrop{
 			7: {id: 7, ownerID: 9, clientID: "9:1", item: 600, count: 1, x: 12, y: 20, z: 15},
 		},
+		projectiles: map[uint64]*worldProjectile{
+			8: {id: 8, ownerID: 9, clientID: "9:2", packID: "magic_pack", itemID: 601,
+				hookScope: "item", hookKey: "MagicStaff", x: 12, y: 21, z: 15, dz: -1, speed: 16, lifetime: 5},
+		},
 	}
+
 	joining := &player{send: make(chan []byte, 8)}
 
 	s.join(joining, &inMsg{T: "hello", V: netVersion, Name: "New player"})
 
 	found := false
+	foundProjectile := false
 	for len(joining.send) > 0 {
 		message := string(<-joining.send)
 		if strings.Contains(message, `"t":"drop-add"`) && strings.Contains(message, `"item":600`) {
 			found = true
 		}
+		if strings.Contains(message, `"t":"projectile-add"`) && strings.Contains(message, `"packId":"magic_pack"`) {
+			foundProjectile = true
+		}
 	}
 	if !found {
 		t.Fatal("joining player did not receive existing dropped items")
 	}
+	if !foundProjectile {
+		t.Fatal("joining player did not receive active projectiles")
+	}
 	if got := s.drops[7].ownerID; got != joining.id {
 		t.Fatalf("orphaned drop owner = %d, want joining player's ID %d", got, joining.id)
+	}
+}
+
+func TestFaviconDoesNotReturnNotFound(t *testing.T) {
+	response := httptest.NewRecorder()
+	handleFavicon(response, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("favicon status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+}
+
+func TestSharedProjectilesAreRelayedAndRemoved(t *testing.T) {
+	first := &player{id: 1, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}
+	second := &player{id: 2, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}
+	s := &server{
+		players:     map[int]*player{first.id: first, second.id: second},
+		projectiles: map[uint64]*worldProjectile{},
+	}
+
+	s.handle(first, &inMsg{
+		T: "projectile-spawn", ClientID: "1:1", PackID: "magic_pack",
+		ProjectileItem: 600, HookScope: "item", HookKey: "MagicStaff",
+		X: 10, Y: 21.5, Z: 10, DZ: -1, Speed: 16, Lifetime: 5, ProjectileDamage: 3,
+	})
+	if len(s.projectiles) != 1 {
+		t.Fatalf("projectile count = %d, want 1", len(s.projectiles))
+	}
+	var projectileID uint64
+	for id := range s.projectiles {
+		projectileID = id
+	}
+	s.projectiles[projectileID].lastUpdate = time.Now().Add(-time.Second)
+	if message := string(<-first.send); !strings.Contains(message, `"t":"projectile-add"`) {
+		t.Fatalf("projectile spawn was not sent to owner: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"packId":"magic_pack"`) ||
+		!strings.Contains(message, `"hookKey":"MagicStaff"`) {
+		t.Fatalf("projectile details were not shared with other players: %q", message)
+	}
+
+	s.handle(first, &inMsg{T: "projectile-update", ProjectileID: projectileID, X: 10, Y: 21.5, Z: 8, Age: 0.1})
+	if message := string(<-second.send); !strings.Contains(message, `"t":"projectile-update"`) ||
+		!strings.Contains(message, `"z":8`) {
+		t.Fatalf("projectile movement was not relayed: %q", message)
+	}
+
+	s.handle(second, &inMsg{T: "projectile-remove", ProjectileID: projectileID})
+	if _, exists := s.projectiles[projectileID]; !exists {
+		t.Fatal("a different player must not remove the projectile")
+	}
+	s.handle(first, &inMsg{T: "projectile-remove", ProjectileID: projectileID})
+	if _, exists := s.projectiles[projectileID]; exists {
+		t.Fatal("owner removal should delete the shared projectile")
+	}
+	if message := string(<-first.send); !strings.Contains(message, `"t":"projectile-remove"`) {
+		t.Fatalf("projectile removal was not sent to owner: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"t":"projectile-remove"`) {
+		t.Fatalf("projectile removal was not broadcast: %q", message)
 	}
 }

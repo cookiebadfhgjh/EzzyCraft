@@ -42,7 +42,7 @@ import (
 var indexHTML []byte
 
 const (
-	netVersion          = 4 // must match NET_VERSION in index.html
+	netVersion          = 5 // must match NET_VERSION in index.html
 	worldW              = 5000
 	worldD              = 5000
 	maxY                = 100
@@ -79,32 +79,43 @@ type player struct {
 
 // inMsg is every message a client can send; unused fields stay zero.
 type inMsg struct {
-	T        string   `json:"t"`
-	V        int      `json:"v"`
-	Name     string   `json:"name"`
-	X        float64  `json:"x"`
-	Y        float64  `json:"y"`
-	Z        float64  `json:"z"`
-	Yaw      float64  `json:"yaw"`
-	Pitch    float64  `json:"pitch"`
-	ID       float64  `json:"id"`
-	M        string   `json:"m"`
-	Dmg      float64  `json:"dmg"` // custom weapon stats (optional)
-	Reach    float64  `json:"reach"`
-	Cd       float64  `json:"cd"`
-	KB       *float64 `json:"kb"`
-	Heal     float64  `json:"heal"`
-	Damage   float64  `json:"damage"`
-	Time     float64  `json:"time"`
-	DropID   uint64   `json:"dropId"`
-	ClientID string   `json:"clientId"`
-	Item     int      `json:"item"`
-	Count    int      `json:"count"`
-	VX       float64  `json:"vx"`
-	VY       float64  `json:"vy"`
-	VZ       float64  `json:"vz"`
-	Age      float64  `json:"age"`
-	Settled  bool     `json:"settled"`
+	T                string   `json:"t"`
+	V                int      `json:"v"`
+	Name             string   `json:"name"`
+	X                float64  `json:"x"`
+	Y                float64  `json:"y"`
+	Z                float64  `json:"z"`
+	Yaw              float64  `json:"yaw"`
+	Pitch            float64  `json:"pitch"`
+	ID               float64  `json:"id"`
+	M                string   `json:"m"`
+	Dmg              float64  `json:"dmg"` // custom weapon stats (optional)
+	Reach            float64  `json:"reach"`
+	Cd               float64  `json:"cd"`
+	KB               *float64 `json:"kb"`
+	Heal             float64  `json:"heal"`
+	Damage           float64  `json:"damage"`
+	Time             float64  `json:"time"`
+	DropID           uint64   `json:"dropId"`
+	ClientID         string   `json:"clientId"`
+	Item             int      `json:"item"`
+	Count            int      `json:"count"`
+	VX               float64  `json:"vx"`
+	VY               float64  `json:"vy"`
+	VZ               float64  `json:"vz"`
+	Age              float64  `json:"age"`
+	Settled          bool     `json:"settled"`
+	ProjectileID     uint64   `json:"projectileId"`
+	PackID           string   `json:"packId"`
+	ProjectileItem   int      `json:"projectileItem"`
+	HookScope        string   `json:"hookScope"`
+	HookKey          string   `json:"hookKey"`
+	DX               float64  `json:"dx"`
+	DY               float64  `json:"dy"`
+	DZ               float64  `json:"dz"`
+	Speed            float64  `json:"speed"`
+	Lifetime         float64  `json:"lifetime"`
+	ProjectileDamage float64  `json:"projectileDamage"`
 }
 
 type saveFile struct {
@@ -118,26 +129,28 @@ type saveFile struct {
 }
 
 type server struct {
-	mu             sync.Mutex
-	opMu           sync.Mutex
-	seed           int32
-	mode           string
-	pvp            bool
-	pvpKnockback   float64
-	wtime          float64
-	spawn          *[3]float64
-	edits          map[uint32]uint8
-	players        map[int]*player
-	drops          map[uint64]*worldDrop
-	nextID         int
-	nextDropID     uint64
-	simID          int // player whose client runs the fluid simulation
-	dirty          bool
-	savePath       string
-	definitionsDir string
-	packsDir       string
-	operatorCode   string
-	opAttempts     map[string]operatorAttempt
+	mu               sync.Mutex
+	opMu             sync.Mutex
+	seed             int32
+	mode             string
+	pvp              bool
+	pvpKnockback     float64
+	wtime            float64
+	spawn            *[3]float64
+	edits            map[uint32]uint8
+	players          map[int]*player
+	drops            map[uint64]*worldDrop
+	projectiles      map[uint64]*worldProjectile
+	nextID           int
+	nextDropID       uint64
+	nextProjectileID uint64
+	simID            int // player whose client runs the fluid simulation
+	dirty            bool
+	savePath         string
+	definitionsDir   string
+	packsDir         string
+	operatorCode     string
+	opAttempts       map[string]operatorAttempt
 }
 
 type worldDrop struct {
@@ -153,12 +166,30 @@ type worldDrop struct {
 	lastUpdate time.Time
 }
 
+type worldProjectile struct {
+	id         uint64
+	ownerID    int
+	clientID   string
+	packID     string
+	itemID     int
+	hookScope  string
+	hookKey    string
+	x, y, z    float64
+	dx, dy, dz float64
+	speed      float64
+	lifetime   float64
+	damage     float64
+	age        float64
+	lastUpdate time.Time
+}
+
 type operatorAttempt struct {
 	failures int
 	expires  time.Time
 }
 
 var sharedPackIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var sharedHookKeyPattern = regexp.MustCompile(`^[a-zA-Z_$][\w$]*$`)
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -348,6 +379,9 @@ func (s *server) join(p *player, m *inMsg) {
 	for _, drop := range s.drops {
 		s.sendTo(p, dropMessage("drop-add", drop))
 	}
+	for _, projectile := range s.projectiles {
+		s.sendTo(p, projectileMessage("projectile-add", projectile))
+	}
 
 	p.joined = true
 	s.players[p.id] = p
@@ -377,6 +411,12 @@ func (s *server) drop(p *player) {
 		if drop.ownerID == p.id && nextOwner != 0 {
 			drop.ownerID = nextOwner
 			s.broadcast(dropMessage("drop-update", drop), nil)
+		}
+	}
+	for id, projectile := range s.projectiles {
+		if projectile.ownerID == p.id {
+			delete(s.projectiles, id)
+			s.broadcast(M{"t": "projectile-remove", "projectileId": id}, nil)
 		}
 	}
 	log.Printf("- %s left (%d players)", p.name, len(s.players))
@@ -425,6 +465,12 @@ func (s *server) handle(p *player, m *inMsg) {
 		s.onDropRemove(p, m)
 	case "drop-pick":
 		s.onDropPick(p, m)
+	case "projectile-spawn":
+		s.onProjectileSpawn(p, m)
+	case "projectile-update":
+		s.onProjectileUpdate(p, m)
+	case "projectile-remove":
+		s.onProjectileRemove(p, m)
 	case "c":
 		s.onChat(p, m)
 	case "spawn":
@@ -593,6 +639,95 @@ func (s *server) onDropPick(p *player, m *inMsg) {
 
 func isFinite(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func projectileMessage(messageType string, projectile *worldProjectile) M {
+	return M{
+		"t": messageType, "projectileId": projectile.id, "owner": projectile.ownerID,
+		"clientId": projectile.clientID, "packId": projectile.packID, "projectileItem": projectile.itemID,
+		"hookScope": projectile.hookScope, "hookKey": projectile.hookKey,
+		"x": projectile.x, "y": projectile.y, "z": projectile.z,
+		"dx": projectile.dx, "dy": projectile.dy, "dz": projectile.dz,
+		"speed": projectile.speed, "lifetime": projectile.lifetime,
+		"projectileDamage": projectile.damage, "age": projectile.age,
+	}
+}
+
+func (s *server) onProjectileSpawn(p *player, m *inMsg) {
+	directionLength := math.Sqrt(m.DX*m.DX + m.DY*m.DY + m.DZ*m.DZ)
+	if m.ClientID == "" || len(m.ClientID) > 64 ||
+		!sharedPackIDPattern.MatchString(m.PackID) || m.ProjectileItem < 1 || m.ProjectileItem > 65535 ||
+		(m.HookScope != "item" && m.HookScope != "feature") ||
+		!sharedHookKeyPattern.MatchString(m.HookKey) ||
+		!validDropPosition(m.X, m.Y, m.Z) ||
+		!isFinite(directionLength) || directionLength < 0.99 || directionLength > 1.01 ||
+		!isFinite(m.Speed) || m.Speed < 0.1 || m.Speed > 80 ||
+		!isFinite(m.Lifetime) || m.Lifetime < 0.1 || m.Lifetime > 30 ||
+		!isFinite(m.ProjectileDamage) || m.ProjectileDamage < 0 || m.ProjectileDamage > 20 {
+		return
+	}
+	if math.Hypot(math.Hypot(m.X-p.x, m.Z-p.z), m.Y-(p.y+1.5)) > 16 {
+		return
+	}
+	if s.projectiles == nil {
+		s.projectiles = make(map[uint64]*worldProjectile)
+	}
+	if len(s.projectiles) >= 256 {
+		s.sendTo(p, M{"t": "projectile-denied", "clientId": m.ClientID})
+		return
+	}
+	for _, existing := range s.projectiles {
+		if existing.ownerID == p.id && existing.clientID == m.ClientID {
+			s.sendTo(p, projectileMessage("projectile-add", existing))
+			return
+		}
+	}
+	s.nextProjectileID++
+	projectile := &worldProjectile{
+		id: s.nextProjectileID, ownerID: p.id, clientID: m.ClientID,
+		packID: m.PackID, itemID: m.ProjectileItem, hookScope: m.HookScope, hookKey: m.HookKey,
+		x: m.X, y: m.Y, z: m.Z, dx: m.DX / directionLength, dy: m.DY / directionLength, dz: m.DZ / directionLength,
+		speed: m.Speed, lifetime: m.Lifetime, damage: m.ProjectileDamage,
+		lastUpdate: time.Now(),
+	}
+	s.projectiles[projectile.id] = projectile
+	s.broadcast(projectileMessage("projectile-add", projectile), nil)
+}
+
+func (s *server) onProjectileUpdate(p *player, m *inMsg) {
+	projectile := s.projectiles[m.ProjectileID]
+	if projectile == nil || projectile.ownerID != p.id || !validDropPosition(m.X, m.Y, m.Z) ||
+		!isFinite(m.Age) || m.Age < 0 || m.Age > projectile.lifetime {
+		return
+	}
+	now := time.Now()
+	if now.Sub(projectile.lastUpdate) < 75*time.Millisecond {
+		return
+	}
+	projectile.x, projectile.y, projectile.z = m.X, m.Y, m.Z
+	projectile.age = m.Age
+	projectile.lastUpdate = now
+	s.broadcast(M{
+		"t": "projectile-update", "projectileId": projectile.id,
+		"x": projectile.x, "y": projectile.y, "z": projectile.z, "age": projectile.age,
+	}, p)
+}
+
+func (s *server) onProjectileRemove(p *player, m *inMsg) {
+	projectile := s.projectiles[m.ProjectileID]
+	if projectile == nil && m.ClientID != "" {
+		for _, candidate := range s.projectiles {
+			if candidate.ownerID == p.id && candidate.clientID == m.ClientID {
+				projectile = candidate
+				break
+			}
+		}
+	}
+	if projectile == nil || projectile.ownerID != p.id {
+		return
+	}
+	delete(s.projectiles, projectile.id)
+	s.broadcast(M{"t": "projectile-remove", "projectileId": projectile.id}, nil)
 }
 
 func (s *server) isOp(p *player) bool {
@@ -1123,6 +1258,10 @@ func setAPICORS(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 }
 
+func handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) authorizedOperator(code string) bool {
 	return s.operatorCode != "" &&
 		subtle.ConstantTimeCompare([]byte(code), []byte(s.operatorCode)) == 1
@@ -1610,6 +1749,7 @@ func main() {
 		edits:          map[uint32]uint8{},
 		players:        map[int]*player{},
 		drops:          map[uint64]*worldDrop{},
+		projectiles:    map[uint64]*worldProjectile{},
 		savePath:       *save,
 		definitionsDir: *definitionsDir,
 		packsDir:       *packsDir,
@@ -1661,6 +1801,7 @@ func main() {
 	http.HandleFunc("/api/definitions", s.handleDefinitions)
 	http.HandleFunc("/api/packs", s.handlePacks)
 	http.HandleFunc("/api/settings", s.handleSettings)
+	http.HandleFunc("/favicon.ico", handleFavicon)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
