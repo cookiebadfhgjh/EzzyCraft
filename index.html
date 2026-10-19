@@ -5486,6 +5486,13 @@ function updateCustomProjectiles(dt) {
         y: projectile.position.y + projectile.direction.y * playerHit.t,
         z: projectile.position.z + projectile.direction.z * playerHit.t,
       };
+      if (projectile.damage > 0 && NET.role && NET.hostConn && NET.hostConn.open) {
+        NET.hostConn.send({
+          t: 'projectile-hit', projectileId: projectile.projectileId,
+          clientId: projectile.clientId, targetId: other.id,
+          hitX: position.x, hitY: position.y, hitZ: position.z,
+        });
+      }
       void runCustomFeatureHook(projectile.definition, 'onProjectileHit', {
         type: 'projectile-hit',
         projectile: { damage: projectile.damage, age: projectile.age },
@@ -6660,7 +6667,7 @@ function updateDayNight() {
    chunked world: guests re-generate terrain from the seed and
    then apply a sparse edit-log the host diffs from dirty chunks.
    ============================================================ */
-const NET_VERSION = 5;          // must match the Go server
+const NET_VERSION = 6;          // must match the Go server
 const MAX_PLAYERS = 8;
 const EDIT_CHUNK  = 48000;
 function defaultServerAddr() {

@@ -210,7 +210,7 @@ The `api` passed to hooks and services exposes:
 | `api.world.setBlock(x, y, z, id)` | Set or remove a nearby in-bounds world block, subject to collision and world validation. |
 | `api.world.spawnDrop(x, y, z, id, count)` | Spawn a registered item drop near the player. |
 | `api.world.setTime(hours)` / `api.world.time` | Request a world time from 0 to under 24 hours, and read the event's current time. Changing shared multiplayer time requires server-operator permission. |
-| `api.projectiles.launch(options)` | Launch a visible projectile. Options include `speed`, `lifetime`, `direction`, `origin`, and `damage`; a hit invokes `onProjectileHit`. Damage is event metadata and does not by itself apply damage to another player. |
+| `api.projectiles.launch(options)` | Launch a visible projectile. Options include `speed`, `lifetime`, `direction`, `origin`, and `damage`; a hit invokes `onProjectileHit`. A positive `damage` value automatically damages a player hit by the projectile in online PvP. |
 | `api.player.heal(amount)` / `damage(amount)` | Heal or damage the local player, subject to gameplay and server rules. |
 | `api.player.addVelocity(x, y, z)` | Apply a velocity change to the local player. |
 | `api.players.list()` / `get(id)` | Read the event's player snapshot(s); these are data, not controls for other players. |
@@ -271,11 +271,11 @@ items: {
 |---|---|
 | `speed` | Projectile speed; defaults to `16`, accepted range is `0.1`–`80`. |
 | `lifetime` | Seconds before the projectile expires; defaults to `5`, accepted range is `0.1`–`30`. |
-| `damage` | Value copied into `event.projectile.damage` (defaults to `0`, range `0`–`20`). It is metadata only and does not automatically damage a player or block. |
+| `damage` | Projectile damage (defaults to `0`, range `0`–`20`). A positive value automatically damages a player hit in online PvP; it does not damage blocks. The value is also available as `event.projectile.damage` in `onProjectileHit`. |
 | `direction` | Optional `{ x, y, z }` direction in world coordinates. If absent or invalid, the view direction is used. The direction is normalized. |
 | `origin` | Optional `{ x, y, z }` world position. It is used only if within 8 blocks of the camera; otherwise the projectile starts at the camera. |
 
-The projectile's originating item behavior or feature handler receives its `onProjectileHit` hook when it hits a solid block. Player collisions are checked only in an online game while PvP is enabled; then the event also has `event.attackedPlayer`. The hit event contains `event.projectile: { damage, age }`, `event.hit` (hit type and details), and the impact `event.position`. A projectile expires without a hit callback when its lifetime elapses. To apply an effect on impact, explicitly call an API from `onProjectileHit`, such as `api.effects.playSound`, `api.effects.particle`, or `api.world.setBlock`; `damage` alone never applies damage.
+The projectile's originating item behavior or feature handler receives its `onProjectileHit` hook when it hits a solid block. Player collisions are checked only in an online game while PvP is enabled; then the event also has `event.attackedPlayer`. A positive `damage` value applies server-authoritative damage to that player, and the hit event contains `event.projectile: { damage, age }`, `event.hit` (hit type and details), and the impact `event.position`. A projectile expires without a hit callback when its lifetime elapses. To apply additional effects on impact, explicitly call an API from `onProjectileHit`, such as `api.effects.playSound`, `api.effects.particle`, or `api.world.setBlock`.
 
 Online player combat and shared time remain server-authoritative. Pack code runs without a per-player approval prompt in an isolated worker without game-page or network access. Hooks have a two-second time limit and actions are validated and bounded. Only import packs from server operators you trust.
 

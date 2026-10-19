@@ -42,7 +42,7 @@ import (
 var indexHTML []byte
 
 const (
-	netVersion          = 5 // must match NET_VERSION in index.html
+	netVersion          = 6 // must match NET_VERSION in index.html
 	worldW              = 5000
 	worldD              = 5000
 	maxY                = 100
@@ -106,6 +106,10 @@ type inMsg struct {
 	Age              float64  `json:"age"`
 	Settled          bool     `json:"settled"`
 	ProjectileID     uint64   `json:"projectileId"`
+	TargetID         int      `json:"targetId"`
+	HitX             float64  `json:"hitX"`
+	HitY             float64  `json:"hitY"`
+	HitZ             float64  `json:"hitZ"`
 	PackID           string   `json:"packId"`
 	ProjectileItem   int      `json:"projectileItem"`
 	HookScope        string   `json:"hookScope"`
@@ -471,6 +475,8 @@ func (s *server) handle(p *player, m *inMsg) {
 		s.onProjectileUpdate(p, m)
 	case "projectile-remove":
 		s.onProjectileRemove(p, m)
+	case "projectile-hit":
+		s.onProjectileHit(p, m)
 	case "c":
 		s.onChat(p, m)
 	case "spawn":
@@ -726,6 +732,58 @@ func (s *server) onProjectileRemove(p *player, m *inMsg) {
 	if projectile == nil || projectile.ownerID != p.id {
 		return
 	}
+	delete(s.projectiles, projectile.id)
+	s.broadcast(M{"t": "projectile-remove", "projectileId": projectile.id}, nil)
+}
+
+func (s *server) onProjectileHit(p *player, m *inMsg) {
+	projectile := s.projectiles[m.ProjectileID]
+	if projectile == nil && m.ClientID != "" {
+		for _, candidate := range s.projectiles {
+			if candidate.ownerID == p.id && candidate.clientID == m.ClientID {
+				projectile = candidate
+				break
+			}
+		}
+	}
+	target := s.players[m.TargetID]
+	if !s.pvp || p.dead || projectile == nil || projectile.ownerID != p.id ||
+		target == nil || target.id == p.id || target.dead ||
+		!isFinite(m.HitX) || !isFinite(m.HitY) || !isFinite(m.HitZ) ||
+		projectile.damage <= 0 || !isFinite(projectile.damage) {
+		return
+	}
+
+	// The impact must be near the projectile's recent path and inside the
+	// target's server-reported bounds, allowing for update and movement delay.
+	dx, dy, dz := m.HitX-projectile.x, m.HitY-projectile.y, m.HitZ-projectile.z
+	alongPath := dx*projectile.dx + dy*projectile.dy + dz*projectile.dz
+	pathDistance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+	maxTravel := projectile.speed*0.5 + 1.5
+	if alongPath < -0.75 || pathDistance > maxTravel ||
+		math.Sqrt(math.Max(0, pathDistance*pathDistance-alongPath*alongPath)) > 1.25 ||
+		m.HitX < target.x-0.55 || m.HitX > target.x+0.55 ||
+		m.HitY < target.y-0.2 || m.HitY > target.y+2.0 ||
+		m.HitZ < target.z-0.55 || m.HitZ > target.z+0.55 {
+		return
+	}
+
+	damage := int(math.Round(math.Max(1, math.Min(maxHealth, projectile.damage))))
+	target.health = max(0, target.health-damage)
+	target.dead = target.health == 0
+	knockX, knockZ := target.x-p.x, target.z-p.z
+	length := math.Hypot(knockX, knockZ)
+	if length == 0 {
+		length = 1
+	}
+	knockX, knockZ = knockX/length, knockZ/length
+	healthUpdate := M{
+		"t": "pvp-health", "id": target.id, "amount": damage, "by": p.name,
+		"health": target.health, "dead": target.dead,
+		"knockX": knockX, "knockZ": knockZ, "knockback": s.pvpKnockback,
+	}
+	s.sendTo(target, healthUpdate)
+	s.broadcast(healthUpdate, target)
 	delete(s.projectiles, projectile.id)
 	s.broadcast(M{"t": "projectile-remove", "projectileId": projectile.id}, nil)
 }

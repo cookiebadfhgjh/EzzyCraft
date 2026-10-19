@@ -591,3 +591,71 @@ func TestSharedProjectilesAreRelayedAndRemoved(t *testing.T) {
 		t.Fatalf("projectile removal was not broadcast: %q", message)
 	}
 }
+
+func TestProjectileHitDamagesPlayerAndRemovesProjectile(t *testing.T) {
+	attacker := &player{id: 1, name: "Attacker", joined: true, x: 0, y: 0, z: 0, send: make(chan []byte, 8)}
+	target := &player{id: 2, name: "Target", joined: true, x: 0, y: 0, z: 5, health: maxHealth, send: make(chan []byte, 8)}
+	projectile := &worldProjectile{
+		id: 9, ownerID: attacker.id, clientID: "1:9",
+		x: 0, y: 1.5, z: 4, dz: 1, speed: 16, lifetime: 5, damage: 3,
+	}
+	s := &server{
+		pvp: true,
+		players: map[int]*player{
+			attacker.id: attacker,
+			target.id:   target,
+		},
+		projectiles: map[uint64]*worldProjectile{projectile.id: projectile},
+	}
+
+	s.handle(attacker, &inMsg{
+		T: "projectile-hit", ProjectileID: projectile.id, TargetID: target.id,
+		HitX: 0, HitY: 1.5, HitZ: 4.7,
+	})
+	if target.health != maxHealth-3 || target.dead {
+		t.Fatalf("target state = health %d, dead %v; want health %d, alive", target.health, target.dead, maxHealth-3)
+	}
+	if _, exists := s.projectiles[projectile.id]; exists {
+		t.Fatal("a damaging projectile should be removed after hitting a player")
+	}
+	var healthUpdate map[string]any
+	if err := json.Unmarshal(<-target.send, &healthUpdate); err != nil {
+		t.Fatalf("invalid target health update: %v", err)
+	}
+	if healthUpdate["t"] != "pvp-health" || healthUpdate["amount"] != float64(3) {
+		t.Fatalf("target health update = %#v, want 3 damage", healthUpdate)
+	}
+	if message := string(<-attacker.send); !strings.Contains(message, `"t":"pvp-health"`) {
+		t.Fatalf("attacker did not receive the health broadcast: %q", message)
+	}
+	if message := string(<-attacker.send); !strings.Contains(message, `"t":"projectile-remove"`) {
+		t.Fatalf("projectile removal was not broadcast: %q", message)
+	}
+}
+
+func TestProjectileHitRejectsUnownedProjectile(t *testing.T) {
+	attacker := &player{id: 1, joined: true, send: make(chan []byte, 2)}
+	other := &player{id: 3, joined: true, send: make(chan []byte, 2)}
+	target := &player{id: 2, joined: true, x: 0, y: 0, z: 5, health: maxHealth, send: make(chan []byte, 2)}
+	projectile := &worldProjectile{id: 9, ownerID: attacker.id, x: 0, y: 1.5, z: 4, dz: 1, speed: 16, damage: 3}
+	s := &server{
+		pvp: true,
+		players: map[int]*player{
+			attacker.id: attacker,
+			other.id:    other,
+			target.id:   target,
+		},
+		projectiles: map[uint64]*worldProjectile{projectile.id: projectile},
+	}
+
+	s.handle(other, &inMsg{
+		T: "projectile-hit", ProjectileID: projectile.id, TargetID: target.id,
+		HitX: 0, HitY: 1.5, HitZ: 4.7,
+	})
+	if target.health != maxHealth {
+		t.Fatalf("unauthorized projectile hit changed target health to %d", target.health)
+	}
+	if _, exists := s.projectiles[projectile.id]; !exists {
+		t.Fatal("an unowned projectile should remain active")
+	}
+}
