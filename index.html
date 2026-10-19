@@ -3476,6 +3476,7 @@ function raycastVoxel(origin, dir, maxDist, hitFluid) {
 const drops = [];
 const DROP_GEO = new THREE.BoxGeometry(0.3, 0.3, 0.3);
 const dropMatCache = new Map();
+let dropClientSequence = 0;
 function getDropMaterial(id) {
   if (dropMatCache.has(id)) return dropMatCache.get(id);
   const tile = getTileForFace(id, [0, 1, 0]);
@@ -3494,8 +3495,27 @@ function getDropMaterial(id) {
   dropMatCache.set(id, mat);
   return mat;
 }
-function spawnDrop(x, y, z, id, count) {
-  if (drops.length >= MAX_DROPS) { const old = drops.shift(); scene.remove(old.mesh); }
+function removeDropAt(index, notifyServer = false) {
+  const [drop] = drops.splice(index, 1);
+  if (!drop) return;
+  scene.remove(drop.mesh);
+  if (notifyServer && drop.dropId && drop.owner === NET.selfId && NET.hostConn && NET.hostConn.open) {
+    NET.hostConn.send({ t: 'drop-remove', dropId: drop.dropId });
+  }
+}
+function publishDrop(drop) {
+  if (!NET.role || NET.loading || !NET.hostConn || !NET.hostConn.open || drop.clientId) return;
+  drop.owner = NET.selfId;
+  drop.clientId = String(NET.selfId) + ':' + (++dropClientSequence);
+  NET.hostConn.send({
+    t: 'drop-spawn', clientId: drop.clientId, item: drop.id, count: drop.count,
+    x: drop.pos.x, y: drop.pos.y, z: drop.pos.z,
+    vx: drop.vel.x, vy: drop.vel.y, vz: drop.vel.z, age: Math.max(0, drop.age),
+    settled: drop.settled,
+  });
+}
+function spawnDrop(x, y, z, id, count, deferNetwork = false) {
+  if (drops.length >= MAX_DROPS) removeDropAt(0, true);
   const customTemplate = customModelTemplates.get(id);
   const mesh = customTemplate ? customTemplate.clone(true) : new THREE.Mesh(DROP_GEO, getDropMaterial(id));
   if (customTemplate) mesh.scale.setScalar(0.35);
@@ -3505,11 +3525,68 @@ function spawnDrop(x, y, z, id, count) {
     mesh, id, count, pos,
     vel: new THREE.Vector3((Math.random() - 0.5) * 1.2, 1.6 + Math.random() * 1.0, (Math.random() - 0.5) * 1.2),
     age: 0, spin: (Math.random() - 0.5) * 3.5, settled: false,
+    owner: null, clientId: '', dropId: 0, netTarget: null, netUpdateAt: 0,
+    pickupPending: false, pickupRetryAt: 0,
   };
   drops.push(d);
+  if (!deferNetwork) publishDrop(d);
   return d;
 }
 function clearDrops() { for (const d of drops) scene.remove(d.mesh); drops.length = 0; }
+function applyNetDrop(message) {
+  if (!Number.isSafeInteger(message.dropId) || message.dropId < 1 ||
+      !Number.isInteger(message.item) || !BLOCK_TYPES[message.item] ||
+      !Number.isInteger(message.count) || message.count < 1 || message.count > 64 ||
+      ![message.x, message.y, message.z, message.vx, message.vy, message.vz].every(Number.isFinite)) return;
+  let drop = drops.find(item => item.dropId === message.dropId);
+  if (!drop && message.owner === NET.selfId && message.clientId) {
+    drop = drops.find(item => item.owner === NET.selfId && item.clientId === message.clientId);
+  }
+  if (!drop) {
+    drop = spawnDrop(message.x, message.y, message.z, message.item, message.count, true);
+  }
+  drop.dropId = message.dropId;
+  drop.owner = message.owner;
+  drop.clientId = message.clientId || drop.clientId;
+  drop.id = message.item;
+  drop.count = message.count;
+  drop.vel.set(message.vx, message.vy, message.vz);
+  drop.age = Number.isFinite(message.age) ? Math.max(drop.age, message.age) : drop.age;
+  drop.settled = message.settled === true;
+  drop.netTarget = message.owner === NET.selfId
+    ? null : new THREE.Vector3(message.x, message.y, message.z);
+}
+function applyNetDropUpdate(message) {
+  if (!Number.isSafeInteger(message.dropId)) return;
+  const drop = drops.find(item => item.dropId === message.dropId);
+  if (!drop) return;
+  if (Number.isInteger(message.owner)) drop.owner = message.owner;
+  if (Number.isInteger(message.count) && message.count > 0 && message.count <= 64) drop.count = message.count;
+  if (![message.x, message.y, message.z, message.vx, message.vy, message.vz].every(Number.isFinite)) return;
+  drop.vel.set(message.vx, message.vy, message.vz);
+  drop.age = Number.isFinite(message.age) ? Math.max(drop.age, message.age) : drop.age;
+  drop.settled = message.settled === true;
+  if (drop.owner !== NET.selfId) drop.netTarget = new THREE.Vector3(message.x, message.y, message.z);
+  else drop.netTarget = null;
+}
+function freeInventoryCapacity(id, count) {
+  if (isTool(id)) return Math.min(count, hotbar.filter(stack => !stack).length);
+  const maxStack = getMaxStackFor(id);
+  let capacity = 0;
+  for (const stack of hotbar) {
+    if (!stack) capacity += maxStack;
+    else if (stack.id === id && stack.count < maxStack) capacity += maxStack - stack.count;
+  }
+  return Math.min(count, capacity);
+}
+function requestDropPickup(drop) {
+  if (!drop.dropId || drop.pickupPending || performance.now() < drop.pickupRetryAt ||
+      !NET.hostConn || !NET.hostConn.open) return;
+  const count = freeInventoryCapacity(drop.id, drop.count);
+  if (count < 1) return;
+  drop.pickupPending = true;
+  NET.hostConn.send({ t: 'drop-pick', dropId: drop.dropId, count });
+}
 function solidAtBox(x, y, z, h) {
   const x0 = Math.floor(x - h), x1 = Math.floor(x + h);
   const y0 = Math.floor(y - h), y1 = Math.floor(y + h);
@@ -3552,8 +3629,21 @@ function updateDrops(dt) {
     const d = drops[i];
     d.age += dt;
     const pos = d.pos;
+    if (NET.role && d.owner !== NET.selfId) {
+      if (d.netTarget) {
+        pos.lerp(d.netTarget, Math.min(1, dt * 14));
+        if (pos.distanceToSquared(d.netTarget) < 0.0004) d.netTarget = null;
+      }
+      d.mesh.rotation.y += d.spin * dt;
+      d.mesh.position.copy(pos);
+      if (d.age > PICKUP_DELAY && !d.pickupPending && d.dropId) {
+        const ddx = px - pos.x, ddy = py - pos.y, ddz = pz - pos.z;
+        if (ddx * ddx + ddy * ddy + ddz * ddz < PICKUP_RADIUS * PICKUP_RADIUS) requestDropPickup(d);
+      }
+      continue;
+    }
     const bHere = getBlock(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
-    if (bHere === LAVA) { scene.remove(d.mesh); drops.splice(i, 1); continue; }
+    if (bHere === LAVA) { removeDropAt(i, true); continue; }
 
     const fluidInfo = fluidPush(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
     if (fluidInfo.inFluid) {
@@ -3572,7 +3662,7 @@ function updateDrops(dt) {
         pos.y += 0.12;
         if (!solidAtBox(pos.x, pos.y, pos.z, half)) { escaped = true; break; }
       }
-      if (!escaped) { scene.remove(d.mesh); drops.splice(i, 1); continue; }
+      if (!escaped) { removeDropAt(i, true); continue; }
       d.vel.set(0, 0, 0); d.settled = true;
     }
     if (!d.settled) {
@@ -3615,19 +3705,31 @@ function updateDrops(dt) {
     d.mesh.rotation.y += d.spin * dt;
     const bob = d.settled ? Math.sin(d.age * 2.5) * 0.05 : 0;
     d.mesh.position.set(pos.x, pos.y + bob, pos.z);
+    if (NET.role && d.owner === NET.selfId && d.dropId && d.age - d.netUpdateAt >= 0.12 &&
+        NET.hostConn && NET.hostConn.open) {
+      d.netUpdateAt = d.age;
+      NET.hostConn.send({
+        t: 'drop-update', dropId: d.dropId, x: pos.x, y: pos.y, z: pos.z,
+        vx: d.vel.x, vy: d.vel.y, vz: d.vel.z, age: Math.max(0, d.age), settled: d.settled,
+      });
+    }
     if (d.age > PICKUP_DELAY) {
       const ddx = px - pos.x, ddy = py - pos.y, ddz = pz - pos.z;
       if (ddx*ddx + ddy*ddy + ddz*ddz < PICKUP_RADIUS * PICKUP_RADIUS) {
-        const left = addToInventory(d.id, d.count);
-        if (left === 0) {
-          scene.remove(d.mesh); drops.splice(i, 1);
-          renderHotbar(); updateHandItem(); playSFX('pickup');
-          if (inventoryOpen) renderInventory();
-          continue;
-        } else d.count = left;
+        if (NET.role) {
+          requestDropPickup(d);
+        } else {
+          const left = addToInventory(d.id, d.count);
+          if (left === 0) {
+            removeDropAt(i);
+            renderHotbar(); updateHandItem(); playSFX('pickup');
+            if (inventoryOpen) renderInventory();
+            continue;
+          } else d.count = left;
+        }
       }
     }
-    if (pos.y < -12) { scene.remove(d.mesh); drops.splice(i, 1); }
+    if (pos.y < -12) removeDropAt(i, true);
   }
 }
 
@@ -3796,10 +3898,12 @@ function dropHeldItem() {
   const dropX = player.pos.x + dirX * 0.7;
   const dropY = player.pos.y + player.eye * 0.7 + dirY * 0.3;
   const dropZ = player.pos.z + dirZ * 0.7;
-  const d = spawnDrop(dropX, dropY, dropZ, stack.id, amount);
+  const d = spawnDrop(dropX, dropY, dropZ, stack.id, amount, true);
   if (d) {
     d.vel.set(dirX * 5 + (Math.random() - 0.5) * 0.5, dirY * 5 + 1.5, dirZ * 5 + (Math.random() - 0.5) * 0.5);
     d.age = -0.3;
+    d.netUpdateAt = d.age;
+    publishDrop(d);
   }
   if (stack.count !== Infinity) {
     stack.count -= amount;
@@ -6470,7 +6574,7 @@ function updateDayNight() {
    chunked world: guests re-generate terrain from the seed and
    then apply a sparse edit-log the host diffs from dirty chunks.
    ============================================================ */
-const NET_VERSION = 3;          // must match the Go server
+const NET_VERSION = 4;          // must match the Go server
 const MAX_PLAYERS = 8;
 const EDIT_CHUNK  = 48000;
 function defaultServerAddr() {
@@ -6934,6 +7038,42 @@ function guestHandle(d) {
         toast('Could not install a shared JavaScript pack: ' + error.message, true);
       });
       break;
+    case 'drop-add':
+      applyNetDrop(d);
+      break;
+    case 'drop-update':
+      applyNetDropUpdate(d);
+      break;
+    case 'drop-remove': {
+      const index = drops.findIndex(drop => drop.dropId === d.dropId);
+      if (index >= 0) removeDropAt(index);
+      break;
+    }
+    case 'drop-denied': {
+      const index = drops.findIndex(drop => drop.clientId === d.clientId);
+      if (index >= 0) removeDropAt(index);
+      toast(d.reason || 'The server could not share that dropped item.', true);
+      break;
+    }
+    case 'drop-pick-denied': {
+      const drop = drops.find(item => item.dropId === d.dropId);
+      if (drop) {
+        drop.pickupPending = false;
+        drop.pickupRetryAt = performance.now() + 500;
+      }
+      break;
+    }
+    case 'drop-picked': {
+      if (!Number.isInteger(d.item) || !BLOCK_TYPES[d.item] ||
+          !Number.isInteger(d.count) || d.count < 1 || d.count > 64) break;
+      const remaining = addToInventory(d.item, d.count);
+      renderHotbar();
+      updateHandItem();
+      if (inventoryOpen) renderInventory();
+      if (remaining > 0) spawnDrop(player.pos.x, player.pos.y + 1, player.pos.z, d.item, remaining);
+      else playSFX('pickup');
+      break;
+    }
     case 'pvp-mode':
       pvpEnabled = d.enabled === true;
       pvpTarget = null;
@@ -7165,6 +7305,7 @@ async function joinGame(code, name) {
     worldTime = (typeof welcome.time === 'number') ? welcome.time : START_TIME;
     currentWorld = null;
 
+    clearDrops();
     chunkData.clear(); generatedChunks.clear(); dirtyChunks.clear();
     invalidateBlockCache();
     clearAllChunks(); clearFluidState();

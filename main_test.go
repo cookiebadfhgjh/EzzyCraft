@@ -407,6 +407,7 @@ func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 		operatorCode: "test-code",
 		players:      map[int]*player{1: recipient},
 	}
+
 	pack := `{"schema":"coop1.10.item-block-pack.v2","id":"test_pack","entries":[{"type":"feature","name":"chat","event":"onChat","handler":"chat"}],"javascript":{"runtime":"coop1.10.pack-javascript.v1","source":"({features:{chat(){}}})"}}`
 
 	unauthorized := httptest.NewRecorder()
@@ -433,5 +434,88 @@ func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 	s.handlePacks(getResponse, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
 	if getResponse.Code != http.StatusOK || !strings.Contains(getResponse.Body.String(), `"id":"test_pack"`) {
 		t.Fatalf("GET response = %d %q, want persisted pack", getResponse.Code, getResponse.Body.String())
+	}
+}
+
+func TestSharedDropsAreRelayedAndPickedUpOnce(t *testing.T) {
+	first := &player{id: 1, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}
+	second := &player{id: 2, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}
+	s := &server{
+		players: map[int]*player{first.id: first, second.id: second},
+		drops:   map[uint64]*worldDrop{},
+	}
+
+	s.handle(first, &inMsg{
+		T: "drop-spawn", ClientID: "1:1", Item: 600, Count: 3,
+		X: 10.5, Y: 21, Z: 10.5, VY: 2, Age: 0.6,
+	})
+	if len(s.drops) != 1 {
+		t.Fatalf("drop count = %d, want 1", len(s.drops))
+	}
+	var dropID uint64
+	for id := range s.drops {
+		dropID = id
+	}
+	if message := string(<-first.send); !strings.Contains(message, `"t":"drop-add"`) {
+		t.Fatalf("drop spawn was not sent to owner: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"item":600`) {
+		t.Fatalf("drop spawn was not shared with other players: %q", message)
+	}
+
+	s.handle(second, &inMsg{T: "drop-pick", DropID: dropID, Count: 2})
+	if got := s.drops[dropID].count; got != 1 {
+		t.Fatalf("remaining drop count = %d, want 1", got)
+	}
+	update := string(<-first.send)
+	if !strings.Contains(update, `"t":"drop-update"`) || !strings.Contains(update, `"count":1`) {
+		t.Fatalf("partial pickup update = %q, want remaining shared count 1", update)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"t":"drop-update"`) {
+		t.Fatalf("picker did not receive remaining drop update: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"t":"drop-picked"`) ||
+		!strings.Contains(message, `"count":2`) {
+		t.Fatalf("picker grant = %q, want 2 picked items", message)
+	}
+
+	s.handle(second, &inMsg{T: "drop-pick", DropID: dropID, Count: 1})
+	if _, exists := s.drops[dropID]; exists {
+		t.Fatal("drop should be removed when its final item is picked up")
+	}
+	if message := string(<-first.send); !strings.Contains(message, `"t":"drop-remove"`) {
+		t.Fatalf("final pickup removal was not broadcast: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"t":"drop-remove"`) {
+		t.Fatalf("picker did not receive final drop removal: %q", message)
+	}
+	if message := string(<-second.send); !strings.Contains(message, `"t":"drop-picked"`) {
+		t.Fatalf("final pickup grant = %q, want picked item", message)
+	}
+}
+
+func TestJoiningPlayerReceivesExistingSharedDrops(t *testing.T) {
+	s := &server{
+		players: map[int]*player{},
+		drops: map[uint64]*worldDrop{
+			7: {id: 7, ownerID: 9, clientID: "9:1", item: 600, count: 1, x: 12, y: 20, z: 15},
+		},
+	}
+	joining := &player{send: make(chan []byte, 8)}
+
+	s.join(joining, &inMsg{T: "hello", V: netVersion, Name: "New player"})
+
+	found := false
+	for len(joining.send) > 0 {
+		message := string(<-joining.send)
+		if strings.Contains(message, `"t":"drop-add"`) && strings.Contains(message, `"item":600`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("joining player did not receive existing dropped items")
+	}
+	if got := s.drops[7].ownerID; got != joining.id {
+		t.Fatalf("orphaned drop owner = %d, want joining player's ID %d", got, joining.id)
 	}
 }

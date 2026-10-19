@@ -42,7 +42,7 @@ import (
 var indexHTML []byte
 
 const (
-	netVersion          = 3 // must match NET_VERSION in index.html
+	netVersion          = 4 // must match NET_VERSION in index.html
 	worldW              = 5000
 	worldD              = 5000
 	maxY                = 100
@@ -79,23 +79,32 @@ type player struct {
 
 // inMsg is every message a client can send; unused fields stay zero.
 type inMsg struct {
-	T      string   `json:"t"`
-	V      int      `json:"v"`
-	Name   string   `json:"name"`
-	X      float64  `json:"x"`
-	Y      float64  `json:"y"`
-	Z      float64  `json:"z"`
-	Yaw    float64  `json:"yaw"`
-	Pitch  float64  `json:"pitch"`
-	ID     float64  `json:"id"`
-	M      string   `json:"m"`
-	Dmg    float64  `json:"dmg"` // custom weapon stats (optional)
-	Reach  float64  `json:"reach"`
-	Cd     float64  `json:"cd"`
-	KB     *float64 `json:"kb"`
-	Heal   float64  `json:"heal"`
-	Damage float64  `json:"damage"`
-	Time   float64  `json:"time"`
+	T        string   `json:"t"`
+	V        int      `json:"v"`
+	Name     string   `json:"name"`
+	X        float64  `json:"x"`
+	Y        float64  `json:"y"`
+	Z        float64  `json:"z"`
+	Yaw      float64  `json:"yaw"`
+	Pitch    float64  `json:"pitch"`
+	ID       float64  `json:"id"`
+	M        string   `json:"m"`
+	Dmg      float64  `json:"dmg"` // custom weapon stats (optional)
+	Reach    float64  `json:"reach"`
+	Cd       float64  `json:"cd"`
+	KB       *float64 `json:"kb"`
+	Heal     float64  `json:"heal"`
+	Damage   float64  `json:"damage"`
+	Time     float64  `json:"time"`
+	DropID   uint64   `json:"dropId"`
+	ClientID string   `json:"clientId"`
+	Item     int      `json:"item"`
+	Count    int      `json:"count"`
+	VX       float64  `json:"vx"`
+	VY       float64  `json:"vy"`
+	VZ       float64  `json:"vz"`
+	Age      float64  `json:"age"`
+	Settled  bool     `json:"settled"`
 }
 
 type saveFile struct {
@@ -119,7 +128,9 @@ type server struct {
 	spawn          *[3]float64
 	edits          map[uint32]uint8
 	players        map[int]*player
+	drops          map[uint64]*worldDrop
 	nextID         int
+	nextDropID     uint64
 	simID          int // player whose client runs the fluid simulation
 	dirty          bool
 	savePath       string
@@ -127,6 +138,19 @@ type server struct {
 	packsDir       string
 	operatorCode   string
 	opAttempts     map[string]operatorAttempt
+}
+
+type worldDrop struct {
+	id         uint64
+	ownerID    int
+	clientID   string
+	item       int
+	count      int
+	x, y, z    float64
+	vx, vy, vz float64
+	age        float64
+	settled    bool
+	lastUpdate time.Time
 }
 
 type operatorAttempt struct {
@@ -291,6 +315,11 @@ func (s *server) join(p *player, m *inMsg) {
 	if s.simID == 0 {
 		s.simID = p.id
 	}
+	for _, drop := range s.drops {
+		if s.players[drop.ownerID] == nil {
+			drop.ownerID = p.id
+		}
+	}
 
 	plist := []M{}
 	for _, q := range s.players {
@@ -316,6 +345,9 @@ func (s *server) join(p *player, m *inMsg) {
 		}
 		s.sendTo(p, M{"t": "edits", "i": i, "d": base64.StdEncoding.EncodeToString(eb[i*editChunk : end])})
 	}
+	for _, drop := range s.drops {
+		s.sendTo(p, dropMessage("drop-add", drop))
+	}
 
 	p.joined = true
 	s.players[p.id] = p
@@ -335,6 +367,18 @@ func (s *server) drop(p *player) {
 	p.joined = false
 	delete(s.players, p.id)
 	s.broadcast(M{"t": "l", "id": p.id, "name": p.name}, nil)
+	var nextOwner int
+	for id := range s.players {
+		if nextOwner == 0 || id < nextOwner {
+			nextOwner = id
+		}
+	}
+	for _, drop := range s.drops {
+		if drop.ownerID == p.id && nextOwner != 0 {
+			drop.ownerID = nextOwner
+			s.broadcast(dropMessage("drop-update", drop), nil)
+		}
+	}
 	log.Printf("- %s left (%d players)", p.name, len(s.players))
 	if s.simID == p.id {
 		s.simID = 0
@@ -373,6 +417,14 @@ func (s *server) handle(p *player, m *inMsg) {
 		s.onPos(p, m)
 	case "b":
 		s.onBlock(p, m)
+	case "drop-spawn":
+		s.onDropSpawn(p, m)
+	case "drop-update":
+		s.onDropUpdate(p, m)
+	case "drop-remove":
+		s.onDropRemove(p, m)
+	case "drop-pick":
+		s.onDropPick(p, m)
 	case "c":
 		s.onChat(p, m)
 	case "spawn":
@@ -444,6 +496,103 @@ func (s *server) onBlock(p *player, m *inMsg) {
 	s.edits[idx] = uint8(id)
 	s.dirty = true
 	s.broadcast(M{"t": "b", "x": x, "y": y, "z": z, "id": id}, p)
+}
+
+func dropMessage(messageType string, drop *worldDrop) M {
+	return M{
+		"t": messageType, "dropId": drop.id, "owner": drop.ownerID, "clientId": drop.clientID,
+		"item": drop.item, "count": drop.count, "x": drop.x, "y": drop.y, "z": drop.z,
+		"vx": drop.vx, "vy": drop.vy, "vz": drop.vz, "age": drop.age, "settled": drop.settled,
+	}
+}
+
+func validDropPosition(x, y, z float64) bool {
+	return !math.IsNaN(x) && !math.IsInf(x, 0) && !math.IsNaN(y) && !math.IsInf(y, 0) &&
+		!math.IsNaN(z) && !math.IsInf(z, 0) &&
+		x >= 0 && x < worldW && y >= -12 && y < maxY+32 && z >= 0 && z < worldD
+}
+
+func (s *server) onDropSpawn(p *player, m *inMsg) {
+	if m.ClientID == "" || len(m.ClientID) > 64 || m.Item < 1 || m.Item > 65535 ||
+		m.Count < 1 || m.Count > 64 || !validDropPosition(m.X, m.Y, m.Z) ||
+		!isFinite(m.VX) || !isFinite(m.VY) || !isFinite(m.VZ) ||
+		math.Abs(m.VX) > 40 || math.Abs(m.VY) > 40 || math.Abs(m.VZ) > 40 {
+		return
+	}
+	if math.Hypot(math.Hypot(m.X-p.x, m.Z-p.z), m.Y-p.y) > 16 {
+		return
+	}
+	if s.drops == nil {
+		s.drops = make(map[uint64]*worldDrop)
+	}
+	if len(s.drops) >= 512 {
+		s.sendTo(p, M{"t": "drop-denied", "clientId": m.ClientID, "reason": "The shared world has reached its dropped-item limit."})
+		return
+	}
+	for _, existing := range s.drops {
+		if existing.ownerID == p.id && existing.clientID == m.ClientID {
+			s.sendTo(p, dropMessage("drop-add", existing))
+			return
+		}
+	}
+	s.nextDropID++
+	drop := &worldDrop{
+		id: s.nextDropID, ownerID: p.id, clientID: m.ClientID,
+		item: m.Item, count: m.Count, x: m.X, y: m.Y, z: m.Z,
+		vx: m.VX, vy: m.VY, vz: m.VZ, age: math.Max(0, m.Age), settled: m.Settled,
+		lastUpdate: time.Now(),
+	}
+	s.drops[drop.id] = drop
+	s.broadcast(dropMessage("drop-add", drop), nil)
+}
+
+func (s *server) onDropUpdate(p *player, m *inMsg) {
+	drop := s.drops[m.DropID]
+	if drop == nil || drop.ownerID != p.id || !validDropPosition(m.X, m.Y, m.Z) ||
+		!isFinite(m.VX) || !isFinite(m.VY) || !isFinite(m.VZ) ||
+		math.Abs(m.VX) > 40 || math.Abs(m.VY) > 40 || math.Abs(m.VZ) > 40 ||
+		!isFinite(m.Age) || m.Age < 0 || m.Age > 86400 {
+		return
+	}
+	now := time.Now()
+	if now.Sub(drop.lastUpdate) < 75*time.Millisecond {
+		return
+	}
+	drop.x, drop.y, drop.z = m.X, m.Y, m.Z
+	drop.vx, drop.vy, drop.vz = m.VX, m.VY, m.VZ
+	drop.age, drop.settled = m.Age, m.Settled
+	drop.lastUpdate = now
+	s.broadcast(dropMessage("drop-update", drop), p)
+}
+
+func (s *server) onDropRemove(p *player, m *inMsg) {
+	drop := s.drops[m.DropID]
+	if drop == nil || drop.ownerID != p.id {
+		return
+	}
+	delete(s.drops, drop.id)
+	s.broadcast(M{"t": "drop-remove", "dropId": drop.id}, nil)
+}
+
+func (s *server) onDropPick(p *player, m *inMsg) {
+	drop := s.drops[m.DropID]
+	if drop == nil || drop.age < 0.6 || m.Count < 1 || m.Count > drop.count ||
+		math.Hypot(math.Hypot(drop.x-p.x, drop.z-p.z), drop.y-(p.y+0.9)) > 3.5 {
+		s.sendTo(p, M{"t": "drop-pick-denied", "dropId": m.DropID})
+		return
+	}
+	drop.count -= m.Count
+	if drop.count == 0 {
+		delete(s.drops, drop.id)
+		s.broadcast(M{"t": "drop-remove", "dropId": drop.id}, nil)
+	} else {
+		s.broadcast(dropMessage("drop-update", drop), nil)
+	}
+	s.sendTo(p, M{"t": "drop-picked", "dropId": drop.id, "item": drop.item, "count": m.Count})
+}
+
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func (s *server) isOp(p *player) bool {
@@ -1460,6 +1609,7 @@ func main() {
 	s := &server{
 		edits:          map[uint32]uint8{},
 		players:        map[int]*player{},
+		drops:          map[uint64]*worldDrop{},
 		savePath:       *save,
 		definitionsDir: *definitionsDir,
 		packsDir:       *packsDir,
