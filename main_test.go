@@ -509,6 +509,72 @@ func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 	}
 }
 
+func TestHandleModsLoadAndUnloadByFilename(t *testing.T) {
+	dir := t.TempDir()
+	pack := `{"schema":"coop1.10.item-block-pack.v2","id":"cool_swords","name":"Cool Swords","entries":[{"type":"feature","name":"chat","event":"onChat","handler":"chat"}],"javascript":{"runtime":"coop1.10.pack-javascript.v1","source":"({features:{chat(){}}})"}}`
+	if err := os.WriteFile(filepath.Join(dir, "cool-swords.json"), []byte(pack), 0o644); err != nil {
+		t.Fatalf("write catalog file: %v", err)
+	}
+	recipient := &player{send: make(chan []byte, 4)}
+	s := &server{
+		modsDir:      dir,
+		activePath:   filepath.Join(dir, "active-mods.json"),
+		operatorCode: "test-code",
+		players:      map[int]*player{1: recipient},
+	}
+
+	catalog := httptest.NewRecorder()
+	s.handleMods(catalog, httptest.NewRequest(http.MethodGet, "/api/mods", nil))
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"file":"cool-swords.json"`) ||
+		!strings.Contains(catalog.Body.String(), `"active":false`) {
+		t.Fatalf("catalog GET = %d %q, want inactive cool-swords.json", catalog.Code, catalog.Body.String())
+	}
+
+	unauthorized := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords"}`))
+	unauthorizedResponse := httptest.NewRecorder()
+	s.handleMods(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized load status = %d, want %d", unauthorizedResponse.Code, http.StatusUnauthorized)
+	}
+
+	load := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords"}`))
+	load.Header.Set("X-Server-Op-Code", "test-code")
+	loaded := httptest.NewRecorder()
+	s.handleMods(loaded, load)
+	if loaded.Code != http.StatusOK || !strings.Contains(loaded.Body.String(), `"kind":"pack"`) {
+		t.Fatalf("load status = %d %q, want pack payload", loaded.Code, loaded.Body.String())
+	}
+	if message := string(<-recipient.send); !strings.Contains(message, `"t":"pack"`) {
+		t.Fatalf("load broadcast = %q, want pack message", message)
+	}
+
+	activePacks := httptest.NewRecorder()
+	s.handlePacks(activePacks, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
+	if activePacks.Code != http.StatusOK || !strings.Contains(activePacks.Body.String(), `"id":"cool_swords"`) {
+		t.Fatalf("active packs = %d %q, want loaded pack", activePacks.Code, activePacks.Body.String())
+	}
+
+	unload := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords.json","action":"unload"}`))
+	unload.Header.Set("X-Server-Op-Code", "test-code")
+	unloaded := httptest.NewRecorder()
+	s.handleMods(unloaded, unload)
+	if unloaded.Code != http.StatusOK || !strings.Contains(unloaded.Body.String(), `"removed":true`) {
+		t.Fatalf("unload status = %d %q, want removed", unloaded.Code, unloaded.Body.String())
+	}
+	if message := string(<-recipient.send); !strings.Contains(message, `"t":"pack-remove"`) {
+		t.Fatalf("unload broadcast = %q, want pack-remove", message)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cool-swords.json")); err != nil {
+		t.Fatalf("catalog file was deleted on unload: %v", err)
+	}
+
+	emptyPacks := httptest.NewRecorder()
+	s.handlePacks(emptyPacks, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
+	if emptyPacks.Code != http.StatusOK || strings.Contains(emptyPacks.Body.String(), `"id":"cool_swords"`) {
+		t.Fatalf("packs after unload = %d %q, want empty active set", emptyPacks.Code, emptyPacks.Body.String())
+	}
+}
+
 func TestSharedDropsAreRelayedAndPickedUpOnce(t *testing.T) {
 	first := &player{id: 1, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}
 	second := &player{id: 2, joined: true, x: 10, y: 20, z: 10, send: make(chan []byte, 8)}

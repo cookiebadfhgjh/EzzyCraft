@@ -476,6 +476,10 @@
   .server-pack-card .pack-id, .server-pack-card .pack-details { opacity: .7; overflow-wrap: anywhere; }
   .server-pack-card .pack-state { color: #9fe870; font-weight: 700; white-space: nowrap; }
   .server-pack-card .pack-state.error { color: #ff9b8c; }
+  .server-pack-card .pack-state.idle { color: #c8c8c8; }
+  .server-pack-card .pack-actions { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+  .mod-load-row { display: flex; gap: 8px; align-items: center; }
+  .mod-load-row .mc-input { flex: 1; min-width: 0; }
   #server-pack-empty { font-size: 10px; opacity: .7; text-align: center; padding: 8px; }
 </style>
 </head>
@@ -667,14 +671,20 @@
         <div style="font-size:10px;opacity:.7">The server operator sets this when starting the server with <code>-op-code</code>.</div>
         <button class="mc-btn" id="btn-server-settings-unlock">Unlock Server Settings</button>
         <div class="form" id="server-settings-tools" style="display:none">
-          <button class="mc-btn accent" id="btn-import-definition">Import Item / Block / Pack</button>
-          <section id="server-pack-dashboard" aria-label="Server pack dashboard">
+          <label for="server-mod-file">LOAD MOD BY FILENAME</label>
+          <div class="mod-load-row">
+            <input class="mc-input" id="server-mod-file" autocomplete="off" spellcheck="false"
+                   placeholder="cool-swords.json">
+            <button type="button" class="mc-btn accent" id="btn-load-mod">Load</button>
+          </div>
+          <div style="font-size:10px;opacity:.7">Put pack or item JSON in the repo <code>mods</code> folder, commit it, then type that filename here. Remove unloads it for everyone but keeps the file.</div>
+          <section id="server-pack-dashboard" aria-label="Server mod dashboard">
             <div class="pack-dashboard-heading">
-              <span>SERVER PACKS <span id="server-pack-count">0</span></span>
-              <button type="button" class="mc-btn" id="btn-refresh-server-packs">Refresh / Load</button>
+              <span>SERVER MODS <span id="server-pack-count">0</span></span>
+              <button type="button" class="mc-btn" id="btn-refresh-server-packs">Refresh</button>
             </div>
             <div id="server-pack-list" aria-live="polite">
-              <div id="server-pack-empty">Refresh to load the server pack list.</div>
+              <div id="server-pack-empty">Unlock to list committed mods.</div>
             </div>
           </section>
           <label for="server-game-mode">SERVER GAME MODE</label>
@@ -733,7 +743,6 @@
 </div>
 
 <input type="file" id="file-input" accept=".mcworld,.json,application/json" style="display:none">
-<input type="file" id="definition-file-input" accept=".json,application/json" style="display:none">
 
 <script type="importmap">
 {"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
@@ -4539,105 +4548,13 @@ document.getElementById('btn-singleplayer').onclick = async () => {
   setMenuState('worlds');
   await renderWorldList();
 };
-document.getElementById('btn-import-definition').onclick = () => {
-  document.getElementById('definition-file-input').click();
+document.getElementById('btn-load-mod').onclick = () => {
+  void loadModFromFilenameInput();
 };
-document.getElementById('definition-file-input').addEventListener('change', async event => {
-  const file = event.target.files && event.target.files[0];
-  event.target.value = '';
-  if (!file) return;
-  try {
-    if (!file.name.toLowerCase().endsWith('.json') || file.size > MAX_CUSTOM_DEFINITION_BYTES) {
-      throw new Error('Choose an item-definition JSON file no larger than 32 MB.');
-    }
-    if (!serverOperatorCode) throw new Error('Unlock Server Settings before importing a definition.');
-    const source = JSON.parse(await file.text());
-    const isPack = source && source.schema === 'coop1.10.item-block-pack.v2';
-    const sources = isPack && Array.isArray(source.entries)
-      ? source.entries.filter(entry => entry.type === 'item' || entry.type === 'block').map(entry => entry.definition)
-      : source && source.schema === 'coop1.10.item-block-pack.v1'
-      ? source.definitions
-      : [source];
-    if (!Array.isArray(sources) || sources.length > 74 ||
-        (!sources.length && (!isPack || !source.entries.length)) ||
-        (isPack && (!Array.isArray(source.entries) || source.entries.length > 256))) {
-      throw new Error('A pack may contain up to 74 item/block definitions and 256 total entries.');
-    }
-    const preparedDefinitions = [];
-    const ids = new Set();
-    const tiles = new Set();
-    for (const itemSource of sources) {
-      const prepared = await prepareCustomDefinition(itemSource);
-      if (isPack) prepared.definition.packId = source.id;
-      const id = prepared.definition.registry.id;
-      const tile = prepared.definition.texture.atlasIndex;
-      if (ids.has(id)) throw new Error('The pack contains duplicate registry ID ' + id + '.');
-      if (tiles.has(tile)) throw new Error('The pack contains duplicate atlas tile ' + tile + '.');
-      ids.add(id);
-      tiles.add(tile);
-      assertCustomDefinitionAvailable(prepared.definition);
-      if (isPack) assertCustomPackDefinitionOwnership(prepared.definition, source.id);
-      preparedDefinitions.push(prepared);
-    }
-    if (isPack) validateCustomPack(source, preparedDefinitions);
-    let imported = 0;
-    let grantWarning = '';
-    for (const prepared of preparedDefinitions) {
-      const definition = prepared.definition;
-      const id = definition.registry.id;
-      const previous = customDefinitionsById.get(id);
-      definition.pendingGrant = previous
-        ? previous.pendingGrant === true
-        : !currentWorld;
-      const sharedDefinition = { ...definition };
-      delete sharedDefinition.pendingGrant;
-      const response = await fetch(serverApiUrl('/api/definitions', serverOperatorAddress), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
-        body: JSON.stringify(sharedDefinition),
-      });
-      if (!response.ok) {
-        throw new Error((imported ? 'Imported ' + imported + ' of ' + preparedDefinitions.length + ' definitions; ' : '') +
-          (await response.text() || 'The server could not save ' + definition.name + '.'));
-      }
-      if (definition.pendingGrant) {
-        const stored = [...customDefinitionsById.values()].filter(entry => entry.registry.id !== id);
-        stored.push(definition);
-        try {
-          await saveCustomDefinitions(stored);
-        } catch (error) {
-          console.error('Shared definition was saved, but its pending item grant could not be persisted:', error);
-          grantWarning = ' Personal pending item grants could not be saved: ' + error.message;
-        }
-      }
-      registerCustomDefinition(definition, prepared.modelTemplate);
-      if (!previous && currentWorld) addToInventory(id, 1);
-      imported++;
-    }
-    if (isPack) {
-      const response = await fetch(serverApiUrl('/api/packs', serverOperatorAddress), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
-        body: JSON.stringify(source),
-      });
-      if (!response.ok) {
-        throw new Error('Imported ' + imported + ' item/block definitions, but the shared pack could not be saved: ' +
-          (await response.text() || response.statusText));
-      }
-      serverSharedPacksById.set(source.id, source);
-      serverPackLoadErrors.delete(source.id);
-      serverPackDashboardMessage = '';
-      renderServerPackDashboard();
-      await installCustomPack(source, preparedDefinitions);
-    }
-    renderHotbar();
-    if (inventoryOpen) renderInventory();
-    toast(imported + (imported === 1 ? ' definition imported.' : ' definitions imported.') +
-      (isPack ? ' Pack services and features are active.' : '') +
-      grantWarning);
-  } catch (error) {
-    console.error('Could not import item definition:', error);
-    toast('Could not import definition: ' + error.message, true);
+document.getElementById('server-mod-file').addEventListener('keydown', event => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    void loadModFromFilenameInput();
   }
 });
 document.getElementById('btn-options').onclick = () => openOptions('title');
@@ -5130,11 +5047,11 @@ document.getElementById('btn-server-settings-unlock').onclick = async () => {
     serverOperatorCode = code;
     serverOperatorAddress = addr;
     document.getElementById('server-settings-tools').style.display = 'flex';
-    void loadServerPacks(addr).then(({ failures }) => {
-      if (failures) toast(failures + ' server pack(s) could not be loaded. Check the pack dashboard.', true);
+    void refreshServerModManager(addr).then(({ failures }) => {
+      if (failures) toast(failures + ' server mod(s) could not be loaded. Check the dashboard.', true);
     }).catch(loadError => {
-      console.error('Could not load the server pack dashboard:', loadError);
-      toast('Could not load the server pack dashboard: ' + loadError.message, true);
+      console.error('Could not load the server mod dashboard:', loadError);
+      toast('Could not load the server mod dashboard: ' + loadError.message, true);
     });
     toast('Server settings unlocked.');
   } catch (error) {
@@ -5153,13 +5070,13 @@ document.getElementById('btn-refresh-server-packs').onclick = async () => {
   const button = document.getElementById('btn-refresh-server-packs');
   button.disabled = true;
   try {
-    const { total, failures } = await loadServerPacks(serverOperatorAddress);
+    const { total, failures } = await refreshServerModManager(serverOperatorAddress);
     toast(failures
-      ? 'Loaded ' + (total - failures) + ' of ' + total + ' server packs. Check the dashboard for errors.'
-      : (total ? 'Loaded ' + total + ' server pack(s).' : 'No shared server packs are installed.'));
+      ? 'Loaded ' + (total - failures) + ' of ' + total + ' active mods. Check the dashboard for errors.'
+      : (total ? 'Refreshed ' + total + ' committed mod(s).' : 'No JSON files are in the mods folder.'));
   } catch (error) {
-    console.error('Could not refresh the server pack dashboard:', error);
-    toast('Could not refresh server packs: ' + error.message, true);
+    console.error('Could not refresh the server mod dashboard:', error);
+    toast('Could not refresh mods: ' + error.message, true);
   } finally {
     button.disabled = false;
   }
@@ -5413,55 +5330,85 @@ const serverPackLoadErrors = new Map();
 const customPackInstallPromises = new Map();
 const customPackEventQueues = new Map();
 const customPackEventBusy = new Set();
+let serverModCatalog = [];
 let serverPackDashboardMessage = '';
 let customFeatureHealthEffectAt = -Infinity;
 let customFeaturePermissionNoticeAt = -Infinity;
 let customFeatureCallId = 0;
+function normalizeModFileName(name) {
+  name = String(name || '').trim().replace(/^.*[\\/]/, '');
+  if (!name) throw new Error('Type the filename of a JSON file in the mods folder.');
+  if (!name.toLowerCase().endsWith('.json')) name += '.json';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,126}\.json$/.test(name)) {
+    throw new Error('Filenames may only use letters, numbers, dots, hyphens, and underscores.');
+  }
+  return name;
+}
 function renderServerPackDashboard() {
   const count = document.getElementById('server-pack-count');
   const list = document.getElementById('server-pack-list');
   if (!count || !list) return;
-  const packs = [...serverSharedPacksById.values()].sort((a, b) => a.id.localeCompare(b.id));
-  count.textContent = String(packs.length);
+  const mods = [...serverModCatalog].sort((a, b) => String(a.file || '').localeCompare(String(b.file || '')));
+  count.textContent = String(mods.length);
   list.replaceChildren();
-  if (!packs.length) {
+  if (!mods.length) {
     const empty = document.createElement('div');
     empty.id = 'server-pack-empty';
-    empty.textContent = serverPackDashboardMessage || 'No server packs are installed.';
+    empty.textContent = serverPackDashboardMessage ||
+      'No JSON files are in the mods folder. Add a pack or definition, commit it, then type its filename to load it.';
     list.append(empty);
     return;
   }
-  for (const pack of packs) {
+  for (const mod of mods) {
     const card = document.createElement('div');
     card.className = 'server-pack-card';
     const name = document.createElement('div');
     name.className = 'pack-name';
-    name.textContent = typeof pack.name === 'string' && pack.name.trim() ? pack.name : pack.id;
+    name.textContent = typeof mod.name === 'string' && mod.name.trim() ? mod.name : (mod.file || mod.id || 'Untitled');
     const status = document.createElement('div');
     status.className = 'pack-state';
-    const error = serverPackLoadErrors.get(pack.id);
+    const error = serverPackLoadErrors.get(mod.file) || serverPackLoadErrors.get(mod.id);
+    const pack = mod.kind === 'pack' ? customPacksById.get(mod.id) : null;
     if (error) {
       status.textContent = 'LOAD ERROR';
       status.classList.add('error');
       status.title = error;
+    } else if (mod.active || pack || (mod.kind === 'definition' && customDefinitionsById.has(Number(mod.id)))) {
+      status.textContent = 'ACTIVE';
     } else {
-      status.textContent = customPacksById.has(pack.id) ? 'ACTIVE' : 'NOT LOADED';
+      status.textContent = 'AVAILABLE';
+      status.classList.add('idle');
     }
     const id = document.createElement('div');
     id.className = 'pack-id';
-    id.textContent = pack.id;
-    const entries = Array.isArray(pack.entries) ? pack.entries : [];
-    const countTypes = type => entries.filter(entry => entry && entry.type === type).length;
+    id.textContent = (mod.kind === 'pack' ? 'pack' : 'item') + ' · ' + (mod.file || '');
     const details = document.createElement('div');
     details.className = 'pack-details';
-    details.textContent = [
-      countTypes('item') + ' items',
-      countTypes('block') + ' blocks',
-      countTypes('service') + ' services',
-      countTypes('feature') + ' features',
-      countTypes('javascript') + ' module entries',
-    ].join(' · ');
+    const installed = serverSharedPacksById.get(mod.id);
+    const entries = installed && Array.isArray(installed.entries) ? installed.entries : [];
+    if (mod.kind === 'pack' && entries.length) {
+      const countTypes = type => entries.filter(entry => entry && entry.type === type).length;
+      details.textContent = [
+        countTypes('item') + ' items',
+        countTypes('block') + ' blocks',
+        countTypes('service') + ' services',
+        countTypes('feature') + ' features',
+      ].join(' · ');
+    } else {
+      details.textContent = mod.id ? 'id ' + mod.id : 'Committed catalog file';
+    }
     card.append(name, status, id, details);
+    if (mod.active) {
+      const actions = document.createElement('div');
+      actions.className = 'pack-actions';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'mc-btn';
+      remove.textContent = 'Remove';
+      remove.onclick = () => { void unloadModByName(mod.file); };
+      actions.append(remove);
+      card.append(actions);
+    }
     list.append(card);
   }
   if (serverPackDashboardMessage) {
@@ -5975,7 +5922,7 @@ const customProjectileTrailMaterial = new THREE.MeshBasicMaterial({
 function spawnCustomProjectile(definition, options, hookRef = null, replicated = null) {
   if (customProjectiles.length >= 128) return;
   const speed = replicated ? replicated.speed :
-    Number.isFinite(options.speed) ? Math.max(0.1, Math.min(80, options.speed)) : 16;
+    Number.isFinite(options.speed) ? Math.max(0.1, Math.min(250, options.speed)) : 16;
   const lifetime = replicated ? replicated.lifetime :
     Number.isFinite(options.lifetime) ? Math.max(0.1, Math.min(30, options.lifetime)) : 5;
   const origin = replicated ? new THREE.Vector3(replicated.x, replicated.y, replicated.z) : camera.position.clone();
@@ -6571,6 +6518,67 @@ function registerCustomDefinition(definition, modelTemplate) {
   const loadedChunks = [...chunkMeshes.keys()].map(key => key.split(',').map(Number));
   for (const [cx, cz] of loadedChunks) buildChunk(cx, cz);
 }
+function clearCustomAtlasTile(tile) {
+  if (!Number.isInteger(tile) || tile < 0) return;
+  const col = tile % ATLAS_COLS, row = Math.floor(tile / ATLAS_COLS);
+  const ctx = atlasCanvas.getContext('2d');
+  ctx.clearRect(col * ATLAS_TILE, row * ATLAS_TILE, ATLAS_TILE, ATLAS_TILE);
+  atlasTexture.needsUpdate = true;
+}
+function stripItemFromInventory(id) {
+  for (let i = 0; i < hotbar.length; i++) {
+    if (hotbar[i] && hotbar[i].id === id) hotbar[i] = null;
+  }
+  for (let i = 0; i < craftGrid.length; i++) {
+    if (craftGrid[i] && craftGrid[i].id === id) craftGrid[i] = null;
+  }
+  if (craftSelectedId === id) craftSelectedId = null;
+}
+function unregisterCustomDefinition(id) {
+  id = Number(id);
+  const definition = customDefinitionsById.get(id);
+  if (!definition) return;
+  disposeCustomFeatureRunner(id);
+  if (definition.recipe && definition.recipe.type === 'smelting') {
+    const oldInput = definition.recipe.input.id;
+    if (SMELT_RECIPES[oldInput] && SMELT_RECIPES[oldInput].id === id) delete SMELT_RECIPES[oldInput];
+    customSmeltTimes.delete(oldInput);
+  }
+  RECIPES.splice(0, RECIPES.length, ...RECIPES.filter(recipe => recipe.result.id !== id));
+  customDefinitionsById.delete(id);
+  customBlockDefinitions.delete(id);
+  customModelTemplates.delete(id);
+  delete BLOCK_TYPES[id];
+  delete BLOCK_TILES[id];
+  delete BLOCK_HARDNESS[id];
+  delete DURABILITY[id];
+  if (definition.texture) clearCustomAtlasTile(definition.texture.atlasIndex);
+  clearCustomCaches(id);
+  stripItemFromInventory(id);
+  handCurrentId = -1;
+  updateHandItem();
+  renderHotbar();
+  if (inventoryOpen) renderInventory();
+  const loadedChunks = [...chunkMeshes.keys()].map(key => key.split(',').map(Number));
+  for (const [cx, cz] of loadedChunks) buildChunk(cx, cz);
+}
+function uninstallCustomPack(packId) {
+  const pack = customPacksById.get(packId) || serverSharedPacksById.get(packId);
+  disposeCustomFeatureRunner(packId, 'Pack was removed.');
+  customPacksById.delete(packId);
+  serverSharedPacksById.delete(packId);
+  serverPackLoadErrors.delete(packId);
+  const entries = pack && Array.isArray(pack.entries) ? pack.entries : [];
+  for (const entry of entries) {
+    if (!entry || (entry.type !== 'item' && entry.type !== 'block') || !entry.definition || !entry.definition.registry) {
+      continue;
+    }
+    const id = entry.definition.registry.id;
+    const current = customDefinitionsById.get(id);
+    if (current && current.packId === packId) unregisterCustomDefinition(id);
+  }
+  renderServerPackDashboard();
+}
 async function loadStoredCustomDefinitions() {
   if (idbAvailable) {
     try {
@@ -6759,8 +6767,95 @@ async function restoreCustomDefinitions() {
   }
 }
 await restoreCustomDefinitions();
+async function refreshModCatalog(addr) {
+  const response = await fetch(serverApiUrl('/api/mods', addr), { cache: 'no-store' });
+  if (!response.ok) throw new Error(await response.text() || 'Could not load the committed mod catalog.');
+  const payload = await response.json();
+  serverModCatalog = Array.isArray(payload && payload.mods) ? payload.mods : [];
+  serverPackDashboardMessage = '';
+  renderServerPackDashboard();
+  return serverModCatalog;
+}
+async function refreshServerModManager(addr) {
+  const result = await loadServerCustomDefinitions(addr);
+  let catalog = [];
+  try {
+    catalog = await refreshModCatalog(addr);
+  } catch (error) {
+    serverPackDashboardMessage = 'Could not list committed mods: ' + error.message;
+    renderServerPackDashboard();
+  }
+  return { total: catalog.length || result.total || 0, failures: result.failures || 0 };
+}
+async function applyLoadedModPayload(payload) {
+  if (!payload || !payload.kind) throw new Error('The server returned an invalid mod payload.');
+  if (payload.kind === 'pack') {
+    if (!payload.pack || typeof payload.pack.id !== 'string') throw new Error('The server returned an invalid pack.');
+    serverSharedPacksById.set(payload.pack.id, payload.pack);
+    serverPackLoadErrors.delete(payload.pack.id);
+    serverPackLoadErrors.delete(payload.file);
+    await installCustomPack(payload.pack);
+    return payload.pack.name || payload.file;
+  }
+  if (!payload.definition) throw new Error('The server returned an invalid definition.');
+  await installSharedDefinition(payload.definition, false);
+  return payload.definition.name || payload.file;
+}
+async function loadModByName(name) {
+  if (!serverOperatorCode) throw new Error('Unlock Server Settings before loading a mod.');
+  const file = normalizeModFileName(name);
+  const response = await fetch(serverApiUrl('/api/mods', serverOperatorAddress), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+    body: JSON.stringify({ file, action: 'load' }),
+  });
+  if (!response.ok) throw new Error(await response.text() || 'The server could not load ' + file + '.');
+  const payload = await response.json();
+  const label = await applyLoadedModPayload(payload);
+  try { await refreshModCatalog(serverOperatorAddress); } catch (error) {
+    console.warn('Mod loaded, but the catalog could not be refreshed:', error);
+  }
+  return label || file;
+}
+async function unloadModByName(name) {
+  if (!serverOperatorCode) {
+    toast('Unlock Server Settings first.', true);
+    return;
+  }
+  try {
+    const file = normalizeModFileName(name);
+    const response = await fetch(serverApiUrl('/api/mods', serverOperatorAddress), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Server-Op-Code': serverOperatorCode },
+      body: JSON.stringify({ file, action: 'unload' }),
+    });
+    if (!response.ok) throw new Error(await response.text() || 'The server could not remove ' + file + '.');
+    const payload = await response.json();
+    if (payload.kind === 'pack') uninstallCustomPack(payload.id);
+    else unregisterCustomDefinition(payload.id);
+    try { await refreshModCatalog(serverOperatorAddress); } catch (error) {
+      console.warn('Mod removed, but the catalog could not be refreshed:', error);
+    }
+    renderServerPackDashboard();
+    toast('Removed ' + (payload.name || file) + '. The file is still in the mods folder.');
+  } catch (error) {
+    console.error('Could not remove mod:', error);
+    toast('Could not remove mod: ' + error.message, true);
+  }
+}
+async function loadModFromFilenameInput() {
+  const input = document.getElementById('server-mod-file');
+  try {
+    const label = await loadModByName(input.value);
+    input.value = '';
+    toast('Loaded ' + label + '.');
+  } catch (error) {
+    console.error('Could not load mod:', error);
+    toast('Could not load mod: ' + error.message, true);
+  }
+}
 async function loadServerPacks(addr) {
-  serverPackDashboardMessage = 'Loading server packs...';
+  serverPackDashboardMessage = 'Loading active server mods...';
   renderServerPackDashboard();
   let packs;
   try {
@@ -6818,7 +6913,7 @@ async function loadServerCustomDefinitions(addr) {
       console.error('Could not install a shared server definition:', error);
     }
   }
-  await loadServerPacks(addr);
+  return loadServerPacks(addr);
 }
 async function installSharedDefinition(source, notify = true) {
   const prepared = await prepareCustomDefinition(source);
@@ -7815,15 +7910,33 @@ function guestHandle(d) {
       chatLine('', NET.isOp ? 'You are now a server operator.' : 'Server operator privileges were removed.', true);
       break;
     case 'definition':
-      void installSharedDefinition(d.definition).catch(error => {
+      void installSharedDefinition(d.definition).then(() => {
+        if (d.file) {
+          const entry = serverModCatalog.find(mod => mod.file === d.file);
+          if (entry) entry.active = true;
+        }
+        renderServerPackDashboard();
+      }).catch(error => {
         console.error('Could not install a shared server definition:', error);
         toast('Could not install a shared server definition: ' + error.message, true);
       });
+      break;
+    case 'definition-remove':
+      unregisterCustomDefinition(d.id);
+      if (d.file) {
+        const entry = serverModCatalog.find(mod => mod.file === d.file);
+        if (entry) entry.active = false;
+      }
+      renderServerPackDashboard();
       break;
     case 'pack':
       if (d.pack && typeof d.pack.id === 'string') {
         serverSharedPacksById.set(d.pack.id, d.pack);
         serverPackDashboardMessage = '';
+        if (d.file) {
+          const entry = serverModCatalog.find(mod => mod.file === d.file);
+          if (entry) entry.active = true;
+        }
         renderServerPackDashboard();
       }
       void installCustomPack(d.pack).then(() => {
@@ -7835,6 +7948,15 @@ function guestHandle(d) {
         console.error('Could not install a shared JavaScript pack:', error);
         toast('Could not install a shared JavaScript pack: ' + error.message, true);
       });
+      break;
+    case 'pack-remove':
+      uninstallCustomPack(d.id);
+      if (d.file) {
+        const entry = serverModCatalog.find(mod => mod.file === d.file);
+        if (entry) entry.active = false;
+        serverPackLoadErrors.delete(d.file);
+      }
+      renderServerPackDashboard();
       break;
     case 'drop-add':
       applyNetDrop(d);

@@ -156,8 +156,11 @@ type server struct {
 	simID            int // player whose client runs the fluid simulation
 	dirty            bool
 	savePath         string
+	modsDir          string
 	definitionsDir   string
 	packsDir         string
+	activePath       string
+	activeMods       map[string]activeMod
 	operatorCode     string
 	opAttempts       map[string]operatorAttempt
 }
@@ -1434,27 +1437,8 @@ func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		entries, err := os.ReadDir(s.definitionsDir)
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Could not read shared server definitions.")
-			log.Println("could not read shared definitions:", err)
-			return
-		}
-		definitions := make([]json.RawMessage, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(s.definitionsDir, entry.Name()))
-			if err != nil || !json.Valid(data) {
-				writeAPIError(w, http.StatusInternalServerError, "A shared server definition file could not be read.")
-				log.Printf("could not read shared definition %q: %v", entry.Name(), err)
-				return
-			}
-			definitions = append(definitions, json.RawMessage(data))
-		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if err := json.NewEncoder(w).Encode(definitions); err != nil {
+		if err := json.NewEncoder(w).Encode(s.activeKindPayloads("definition")); err != nil {
 			log.Println("could not return shared definitions:", err)
 		}
 	case http.MethodPost:
@@ -1522,6 +1506,11 @@ func (s *server) handleDefinitions(w http.ResponseWriter, r *http.Request) {
 			log.Println("could not save shared definition:", err)
 			return
 		}
+		if info, ok := inspectMod(data); ok {
+			info.File = fmt.Sprintf("%d.json", metadata.Registry.ID)
+			info.Path = path
+			s.rememberActiveLocked(info)
+		}
 		s.broadcast(M{"t": "definition", "definition": json.RawMessage(data)}, nil)
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
@@ -1538,27 +1527,8 @@ func (s *server) handlePacks(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		entries, err := os.ReadDir(s.packsDir)
-		if err != nil {
-			writeAPIError(w, http.StatusInternalServerError, "Could not read shared server packs.")
-			log.Println("could not read shared packs:", err)
-			return
-		}
-		packs := make([]json.RawMessage, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
-				continue
-			}
-			data, err := os.ReadFile(filepath.Join(s.packsDir, entry.Name()))
-			if err != nil || !json.Valid(data) {
-				writeAPIError(w, http.StatusInternalServerError, "A shared server pack file could not be read.")
-				log.Printf("could not read shared pack %q: %v", entry.Name(), err)
-				return
-			}
-			packs = append(packs, json.RawMessage(data))
-		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		if err := json.NewEncoder(w).Encode(packs); err != nil {
+		if err := json.NewEncoder(w).Encode(s.activeKindPayloads("pack")); err != nil {
 			log.Println("could not return shared packs:", err)
 		}
 	case http.MethodPost:
@@ -1624,6 +1594,11 @@ func (s *server) handlePacks(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusInternalServerError, "Could not save the shared pack.")
 			log.Println("could not save shared pack:", err)
 			return
+		}
+		if info, ok := inspectMod(data); ok {
+			info.File = metadata.ID + ".json"
+			info.Path = path
+			s.rememberActiveLocked(info)
 		}
 		s.broadcast(M{"t": "pack", "pack": json.RawMessage(data)}, nil)
 		s.mu.Unlock()
@@ -1839,8 +1814,9 @@ func main() {
 	pvp := flag.Bool("pvp", false, "PvP on at start; only used when creating a new world")
 	save := flag.String("save", "world.mcsrv.json", "world save file")
 	operatorCode := flag.String("op-code", os.Getenv("EZZYCRAFT_OP_CODE"), "server operator code; required to unlock in-game server settings (or set EZZYCRAFT_OP_CODE)")
-	definitionsDir := flag.String("definitions-dir", filepath.Join("server_data", "definitions"), "folder for shared item/block JSON definitions")
-	packsDir := flag.String("packs-dir", filepath.Join("server_data", "packs"), "folder for shared JavaScript pack JSON files")
+	modsDir := flag.String("mods-dir", "mods", "folder of committed pack/definition JSON files loaded by filename")
+	definitionsDir := flag.String("definitions-dir", filepath.Join("server_data", "definitions"), "legacy folder still searched for shared item/block JSON definitions")
+	packsDir := flag.String("packs-dir", filepath.Join("server_data", "packs"), "legacy folder still searched for shared JavaScript pack JSON files")
 	useNgrok := flag.Bool("ngrok", false, "start an ngrok tunnel and print the public URL")
 	ngrokDomain := flag.String("ngrok-domain", "", "optional reserved ngrok domain, e.g. my-name.ngrok-free.app")
 	flag.Parse()
@@ -1852,11 +1828,16 @@ func main() {
 		drops:          map[uint64]*worldDrop{},
 		projectiles:    map[uint64]*worldProjectile{},
 		savePath:       *save,
+		modsDir:        *modsDir,
 		definitionsDir: *definitionsDir,
 		packsDir:       *packsDir,
+		activePath:     filepath.Join("server_data", "active-mods.json"),
 		operatorCode:   *operatorCode,
 		pvpKnockback:   defaultPvpKnockback,
 		wtime:          startTime,
+	}
+	if err := os.MkdirAll(s.modsDir, 0o755); err != nil {
+		log.Fatal("could not create mods folder: ", err)
 	}
 	if err := os.MkdirAll(s.definitionsDir, 0o755); err != nil {
 		log.Fatal("could not create shared definitions folder: ", err)
@@ -1864,6 +1845,8 @@ func main() {
 	if err := os.MkdirAll(s.packsDir, 0o755); err != nil {
 		log.Fatal("could not create shared packs folder: ", err)
 	}
+	s.loadActiveMods()
+	log.Printf("mod catalog: %d files, %d active", len(s.listAvailableMods()), len(s.activeMods))
 	if s.operatorCode == "" {
 		log.Println("server operator settings are disabled (set -op-code to enable them)")
 	}
@@ -1901,6 +1884,7 @@ func main() {
 	http.HandleFunc("/api/operator", s.handleOperator)
 	http.HandleFunc("/api/definitions", s.handleDefinitions)
 	http.HandleFunc("/api/packs", s.handlePacks)
+	http.HandleFunc("/api/mods", s.handleMods)
 	http.HandleFunc("/api/settings", s.handleSettings)
 	http.HandleFunc("/favicon.ico", handleFavicon)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
