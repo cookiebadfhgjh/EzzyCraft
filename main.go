@@ -42,12 +42,14 @@ import (
 var indexHTML []byte
 
 const (
-	netVersion          = 6 // must match NET_VERSION in index.html
+	netVersion          = 7 // must match NET_VERSION in index.html
 	worldW              = 5000
 	worldD              = 5000
 	maxY                = 100
 	maxPlayers          = 8
 	editChunk           = 48000
+	blockWater          = 14
+	blockLava           = 22
 	maxHealth           = 20
 	pvpReach            = 4.2
 	pvpDamage           = 4
@@ -88,6 +90,7 @@ type inMsg struct {
 	Yaw              float64  `json:"yaw"`
 	Pitch            float64  `json:"pitch"`
 	ID               float64  `json:"id"`
+	Lv               float64  `json:"lv"` // fluid flow level (0 = source)
 	M                string   `json:"m"`
 	Dmg              float64  `json:"dmg"` // custom weapon stats (optional)
 	Reach            float64  `json:"reach"`
@@ -130,6 +133,7 @@ type saveFile struct {
 	PvPKnockback *float64    `json:"pvpKnockback,omitempty"`
 	Spawn        *[3]float64 `json:"spawn,omitempty"`
 	Edits        []byte      `json:"edits"` // 5 bytes per edit: uint32 LE voxel index + block id
+	Fluid        []byte      `json:"fluid,omitempty"` // same layout, value is the flow level
 }
 
 type server struct {
@@ -142,6 +146,7 @@ type server struct {
 	wtime            float64
 	spawn            *[3]float64
 	edits            map[uint32]uint8
+	fluid            map[uint32]uint8 // flow level of flowing water/lava; absent = source
 	players          map[int]*player
 	drops            map[uint64]*worldDrop
 	projectiles      map[uint64]*worldProjectile
@@ -316,10 +321,12 @@ func (s *server) uniqueName(n string, id int) string {
 	return out
 }
 
-func (s *server) encodeEdits() []byte {
-	buf := make([]byte, 0, len(s.edits)*5)
+func (s *server) encodeEdits() []byte { return encodeVoxels(s.edits) }
+
+func encodeVoxels(m map[uint32]uint8) []byte {
+	buf := make([]byte, 0, len(m)*5)
 	var tmp [4]byte
-	for idx, v := range s.edits {
+	for idx, v := range m {
 		binary.LittleEndian.PutUint32(tmp[:], idx)
 		buf = append(buf, tmp[:]...)
 		buf = append(buf, v)
@@ -363,10 +370,13 @@ func (s *server) join(p *player, m *inMsg) {
 	}
 	eb := s.encodeEdits()
 	nChunks := (len(eb) + editChunk - 1) / editChunk
+	fb := encodeVoxels(s.fluid)
+	nFluidChunks := (len(fb) + editChunk - 1) / editChunk
 	welcome := M{
 		"t": "welcome", "id": p.id, "seed": s.seed, "mode": s.mode, "time": s.wtime,
 		"pvp": s.pvp, "pvpKnockback": s.pvpKnockback, "op": p.op,
 		"players": plist, "editBytes": len(eb), "chunks": nChunks,
+		"fluidBytes": len(fb), "fluidChunks": nFluidChunks,
 		"sim": s.simID == p.id, "spawn": nil,
 	}
 	if s.spawn != nil {
@@ -379,6 +389,13 @@ func (s *server) join(p *player, m *inMsg) {
 			end = len(eb)
 		}
 		s.sendTo(p, M{"t": "edits", "i": i, "d": base64.StdEncoding.EncodeToString(eb[i*editChunk : end])})
+	}
+	for i := 0; i < nFluidChunks; i++ {
+		end := (i + 1) * editChunk
+		if end > len(fb) {
+			end = len(fb)
+		}
+		s.sendTo(p, M{"t": "fluid", "i": i, "d": base64.StdEncoding.EncodeToString(fb[i*editChunk : end])})
 	}
 	for _, drop := range s.drops {
 		s.sendTo(p, dropMessage("drop-add", drop))
@@ -541,13 +558,29 @@ func (s *server) onBlock(p *player, m *inMsg) {
 	if id < 0 || id > 255 || id == 9 || (id >= 100 && id <= 118) {
 		return
 	}
+	lv := 0
+	if (id == blockWater || id == blockLava) && isInt(m.Lv) && m.Lv > 0 && m.Lv < 16 {
+		lv = int(m.Lv)
+	}
 	idx := voxelIndex(x, y, z)
-	if old, ok := s.edits[idx]; ok && int(old) == id {
+	if old, ok := s.edits[idx]; ok && int(old) == id && int(s.fluid[idx]) == lv {
 		return
 	}
 	s.edits[idx] = uint8(id)
+	if s.fluid == nil {
+		s.fluid = map[uint32]uint8{}
+	}
+	if lv > 0 {
+		s.fluid[idx] = uint8(lv)
+	} else {
+		delete(s.fluid, idx)
+	}
 	s.dirty = true
-	s.broadcast(M{"t": "b", "x": x, "y": y, "z": z, "id": id}, p)
+	out := M{"t": "b", "x": x, "y": y, "z": z, "id": id}
+	if lv > 0 {
+		out["lv"] = lv
+	}
+	s.broadcast(out, p)
 }
 
 func dropMessage(messageType string, drop *worldDrop) M {
@@ -1690,6 +1723,7 @@ func (s *server) save(force bool) {
 	sf := saveFile{
 		Seed: s.seed, Mode: s.mode, Time: s.wtime, PVP: s.pvp,
 		PvPKnockback: &knockback, Spawn: s.spawn, Edits: s.encodeEdits(),
+		Fluid: encodeVoxels(s.fluid),
 	}
 	s.dirty = false
 	path := s.savePath
@@ -1730,6 +1764,14 @@ func (s *server) load() bool {
 	}
 	for o := 0; o+5 <= len(sf.Edits); o += 5 {
 		s.edits[binary.LittleEndian.Uint32(sf.Edits[o:o+4])] = sf.Edits[o+4]
+	}
+	if s.fluid == nil {
+		s.fluid = map[uint32]uint8{}
+	}
+	for o := 0; o+5 <= len(sf.Fluid); o += 5 {
+		if sf.Fluid[o+4] > 0 {
+			s.fluid[binary.LittleEndian.Uint32(sf.Fluid[o:o+4])] = sf.Fluid[o+4]
+		}
 	}
 	return true
 }
@@ -1805,6 +1847,7 @@ func main() {
 
 	s := &server{
 		edits:          map[uint32]uint8{},
+		fluid:          map[uint32]uint8{},
 		players:        map[int]*player{},
 		drops:          map[uint64]*worldDrop{},
 		projectiles:    map[uint64]*worldProjectile{},

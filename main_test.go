@@ -259,6 +259,63 @@ func TestPvPKnockbackPersistsIncludingDisabled(t *testing.T) {
 	}
 }
 
+func TestFluidLevelsRelayAndPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "world.json")
+	sender := &player{id: 1, send: make(chan []byte, 8)}
+	other := &player{id: 2, send: make(chan []byte, 8)}
+	s := &server{
+		savePath: path, mode: "survival",
+		edits: map[uint32]uint8{}, fluid: map[uint32]uint8{},
+		players: map[int]*player{1: sender, 2: other},
+	}
+	next := func() map[string]any {
+		t.Helper()
+		select {
+		case b := <-other.send:
+			var out map[string]any
+			if err := json.Unmarshal(b, &out); err != nil {
+				t.Fatal(err)
+			}
+			return out
+		default:
+			return nil
+		}
+	}
+	idx := voxelIndex(5, 10, 6)
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 3})
+	if msg := next(); msg == nil || msg["lv"] != float64(3) {
+		t.Fatalf("flowing water broadcast = %v, want lv 3", msg)
+	}
+	if s.fluid[idx] != 3 {
+		t.Fatalf("stored level = %d, want 3", s.fluid[idx])
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 3})
+	if msg := next(); msg != nil {
+		t.Fatalf("unchanged update was rebroadcast: %v", msg)
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 1})
+	if msg := next(); msg == nil || msg["lv"] != float64(1) {
+		t.Fatalf("level-only change broadcast = %v, want lv 1", msg)
+	}
+
+	s.save(true)
+	loaded := &server{savePath: path, edits: map[uint32]uint8{}}
+	if !loaded.load() || loaded.fluid[idx] != 1 {
+		t.Fatalf("loaded level = %d, want 1", loaded.fluid[idx])
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: 3, Lv: 4})
+	if msg := next(); msg == nil || msg["lv"] != nil {
+		t.Fatalf("stone broadcast = %v, want no lv", msg)
+	}
+	if _, ok := s.fluid[idx]; ok {
+		t.Fatal("level kept after fluid was replaced by stone")
+	}
+}
+
 func TestHandleSettingsRequiresOperatorAndBroadcasts(t *testing.T) {
 	member := &player{send: make(chan []byte, 8)}
 	s := &server{

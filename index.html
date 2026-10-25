@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Minecraft</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -121,6 +123,41 @@
     justify-content: center; background: rgba(0,0,0,.65); backdrop-filter: blur(4px);
     opacity: 0; transition: opacity .18s; overflow-y: auto; padding: 20px; }
   #inventory.open { display: flex; opacity: 1; }
+  #inventory .inv-panel { position: relative; }
+  #inv-close { display: none; position: absolute; top: 8px; right: 8px; width: 40px; height: 40px;
+    border-radius: 8px; border: 2px solid rgba(255,255,255,.3); background: rgba(255,255,255,.08);
+    color: #fff; font-size: 18px; cursor: pointer; }
+  body.touch-mode #inv-close { display: block; }
+
+  /* Touch controls */
+  body.touch-mode { touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  body.touch-mode input { -webkit-user-select: text; user-select: text; }
+  #touch-ui { display: none; position: fixed; inset: 0; z-index: 9; pointer-events: none; }
+  body.touch-mode.touch-active.in-game #touch-ui { display: block; }
+  body.touch-mode #hint { display: none !important; }
+  #t-look { position: absolute; inset: 0; pointer-events: auto; }
+  #t-stick { position: absolute; left: 0; bottom: 0; width: 42%; height: 65%; pointer-events: auto; }
+  #t-stick-base { display: none; position: absolute; width: 110px; height: 110px; margin: -55px 0 0 -55px;
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.35); background: rgba(0,0,0,.25); }
+  #t-stick-base.sprint { border-color: rgba(159,232,112,.85); }
+  #t-stick-knob { position: absolute; left: 50%; top: 50%; width: 48px; height: 48px; margin: -24px 0 0 -24px;
+    border-radius: 50%; background: rgba(255,255,255,.5); }
+  .t-btn { position: absolute; pointer-events: auto; width: 68px; height: 68px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;
+    letter-spacing: 1px; color: #fff; text-shadow: 0 1px 2px #000;
+    background: rgba(0,0,0,.35); border: 2px solid rgba(255,255,255,.35); }
+  .t-btn.on { background: rgba(255,255,255,.35); }
+  #t-jump  { right: calc(22px + env(safe-area-inset-right)); bottom: 28px; width: 78px; height: 78px; }
+  #t-sneak { right: calc(112px + env(safe-area-inset-right)); bottom: 18px; }
+  #t-mine  { right: calc(26px + env(safe-area-inset-right)); bottom: 122px; }
+  #t-use   { right: calc(106px + env(safe-area-inset-right)); bottom: 104px; }
+  #t-top { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; }
+  .t-btn.t-small { position: static; width: 52px; height: 36px; border-radius: 8px; font-size: 10px; }
+  body.touch-mode #hotbar { gap: 3px; padding: 4px; bottom: 8px; }
+  body.touch-mode .slot { width: min(44px, calc((100vw - 48px) / 9)); height: min(44px, calc((100vw - 48px) / 9)); }
+  body.touch-mode #health-bar { bottom: 66px; }
+  body.touch-mode #air-bar { bottom: 88px; }
   #inventory .inv-panel { background: rgba(18,20,26,.96);
     border: 2px solid rgba(255,255,255,.2); border-radius: 12px; padding: 22px 26px;
     text-align: center; box-shadow: 0 24px 70px rgba(0,0,0,.7);
@@ -392,8 +429,24 @@
   <div class="cp-box">CLICK TO PLAY</div>
 </div>
 
+<div id="touch-ui">
+  <div id="t-look"></div>
+  <div id="t-stick"><div id="t-stick-base"><div id="t-stick-knob"></div></div></div>
+  <div id="t-top">
+    <div class="t-btn t-small" id="t-pause">II</div>
+    <div class="t-btn t-small" id="t-inv">INV</div>
+    <div class="t-btn t-small" id="t-drop">DROP</div>
+    <div class="t-btn t-small" id="t-chat">CHAT</div>
+  </div>
+  <div class="t-btn" id="t-mine">MINE</div>
+  <div class="t-btn" id="t-use">USE</div>
+  <div class="t-btn" id="t-jump">JUMP</div>
+  <div class="t-btn" id="t-sneak">SNEAK</div>
+</div>
+
 <div id="inventory">
   <div class="inv-panel">
+    <button id="inv-close" aria-label="Close inventory">✕</button>
     <h2 id="inv-title">INVENTORY</h2>
     <div class="furnace-section" id="furnace-section" style="display:none">
       <div class="furnace-title">FURNACE</div>
@@ -602,6 +655,10 @@ import { GLTFLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders
 THREE.ColorManagement.enabled = false;
 
 /* Shared flags used by the co-op hooks (declared before use) */
+// Phones/tablets (or ?touch=1) get on-screen controls instead of mouse + keyboard.
+const TOUCH_MODE = /[?&]touch=1\b/.test(location.search) ||
+  (window.matchMedia && matchMedia('(hover: none) and (pointer: coarse)').matches);
+if (TOUCH_MODE) document.body.classList.add('touch-mode');
 let suppressNet = false;   // when true, setBlock will not broadcast
 let netBusy     = false;   // freeze world sim during hosting prep
 
@@ -663,10 +720,14 @@ const DURABILITY = {
 };
 DURABILITY[119] = 500
 
-const WATER_FLOW_INTERVAL = 0.5;
+const WATER_FLOW_INTERVAL = 0.25;
 const LAVA_FLOW_INTERVAL  = 1.5;
-const WATER_MAX_SPREAD    = 5;
-const LAVA_MAX_SPREAD     = 2;
+const WATER_MAX_SPREAD    = 7;
+const LAVA_MAX_SPREAD     = 3;
+const WATER_SEEK_DIST     = 4;
+const LAVA_SEEK_DIST      = 2;
+const FLUID_FAST_FALL     = 3;
+const FLUID_SOURCE_HEIGHT = 0.9;
 const LAVA_DAMAGE = 4;
 const LAVA_DAMAGE_INTERVAL = 0.5;
 
@@ -1670,12 +1731,56 @@ function isSolid(id) {
 /* ============================================================
    FLUID SIMULATION
    ============================================================ */
+// Level 0 (or no entry, e.g. world-generated water) is a source block; 1..max is flowing.
 const fluidLevels = new Map();
-const fluidFalling = new Set();
 const activeFluids = new Set();
 const fallingBlocks = new Set();
+const fluidRebuildChunks = new Set();
+const FLOW_DIRS = [[1,0],[-1,0],[0,1],[0,-1]];
 
 function fluidKey(x, y, z) { return x + ',' + y + ',' + z; }
+function getFluidLevel(x, y, z) { return fluidLevels.get(fluidKey(x, y, z)) ?? 0; }
+function fluidMaxLevel(id) { return id === WATER ? WATER_MAX_SPREAD : LAVA_MAX_SPREAD; }
+function isFluidReplaceable(x, y, z) {
+  if (x < 0 || x >= WORLD_W || y < 0 || y >= MAX_Y || z < 0 || z >= WORLD_D) return false;
+  const b = getBlock(x, y, z);
+  return b === AIR || isPlantBlock(b);
+}
+// Surface height of a fluid cell (0..1); falling/covered cells are full.
+function fluidSurfaceHeight(x, y, z, id) {
+  if (getBlock(x, y + 1, z) === id) return 1;
+  const level = getFluidLevel(x, y, z);
+  if (level === 0) return FLUID_SOURCE_HEIGHT;
+  const max = fluidMaxLevel(id);
+  return FLUID_SOURCE_HEIGHT * (max + 1 - level) / (max + 1);
+}
+// Height at the grid corner (x, z), averaged over the up-to-4 fluid cells sharing it.
+function fluidCornerHeight(x, y, z, id) {
+  let sum = 0, n = 0;
+  for (let dx = -1; dx <= 0; dx++) for (let dz = -1; dz <= 0; dz++) {
+    const cx = x + dx, cz = z + dz;
+    if (getBlock(cx, y, cz) !== id) continue;
+    if (getBlock(cx, y + 1, cz) === id) return 1;
+    sum += fluidSurfaceHeight(cx, y, cz, id); n++;
+  }
+  return n ? sum / n : FLUID_SOURCE_HEIGHT;
+}
+function markFluidChanged(x, z) {
+  const cx = Math.floor(x / CHUNK_SIZE), cz = Math.floor(z / CHUNK_SIZE);
+  const lx = x - cx * CHUNK_SIZE, lz = z - cz * CHUNK_SIZE;
+  const x0 = lx === 0 ? -1 : 0, x1 = lx === CHUNK_SIZE - 1 ? 1 : 0;
+  const z0 = lz === 0 ? -1 : 0, z1 = lz === CHUNK_SIZE - 1 ? 1 : 0;
+  for (let dx = x0; dx <= x1; dx++)
+    for (let dz = z0; dz <= z1; dz++) fluidRebuildChunks.add(chunkKey(cx + dx, cz + dz));
+}
+function flushFluidRebuilds() {
+  for (const key of fluidRebuildChunks) {
+    if (!chunkMeshes.has(key)) continue;
+    const [cx, cz] = key.split(',').map(Number);
+    buildChunk(cx, cz);
+  }
+  fluidRebuildChunks.clear();
+}
 function activateFallingBlock(x, y, z) {
   if (x >= 0 && x < WORLD_W && y >= 0 && y < MAX_Y && z >= 0 && z < WORLD_D) {
     fallingBlocks.add(fluidKey(x, y, z));
@@ -1721,94 +1826,149 @@ function tickFallingBlocks() {
   }
 }
 
-function tickFluid(id) {
-  if (activeFluids.size === 0) return;
-  const isWater = (id === WATER);
-  const maxLevel = isWater ? WATER_MAX_SPREAD : LAVA_MAX_SPREAD;
-  const toProcess = Array.from(activeFluids);
-  activeFluids.clear();
-
-  for (const key of toProcess) {
-    const parts = key.split(',');
-    const x = parseInt(parts[0], 10), y = parseInt(parts[1], 10), z = parseInt(parts[2], 10);
-    if (x < 0 || x >= WORLD_W || y < 0 || y >= MAX_Y || z < 0 || z >= WORLD_D) continue;
-    const here = getBlock(x, y, z);
-    if (here !== id) { fluidLevels.delete(key); fluidFalling.delete(key); continue; }
-    const level = fluidLevels.get(key) ?? 0;
-    const isFallingColumn = fluidFalling.has(key);
-
-    const below = getBlock(x, y - 1, z);
-    if (below === AIR) {
-      setBlock(x, y - 1, z, id);
-      fluidLevels.set(fluidKey(x, y - 1, z), 0);
-      fluidFalling.add(fluidKey(x, y - 1, z));
-      addActive(x, y - 1, z); wakeFluid(x, y - 1, z); addActive(x, y, z);
-      continue;
-    }
-    if (below !== id && (below === WATER || below === LAVA)) {
-      setBlock(x, y - 1, z, STONE);
-      fluidLevels.delete(fluidKey(x, y - 1, z));
-      fluidFalling.delete(fluidKey(x, y - 1, z));
-      wakeFluid(x, y - 1, z);
-      continue;
-    }
-    if (below === id) fluidFalling.delete(key);
-
-    let effectiveLevel = level;
-    if (isFallingColumn && below === id) effectiveLevel = 0;
-    else if (isFallingColumn) effectiveLevel = 1;
-
-    if (effectiveLevel < maxLevel) {
-      const nextLevel = effectiveLevel + 1;
-      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-      let flowed = false;
-      for (const [dx, dz] of dirs) {
-        const nx = x + dx, nz = z + dz;
-        if (getBlock(nx, y, nz) === AIR) {
-          setBlock(nx, y, nz, id);
-          fluidLevels.set(fluidKey(nx, y, nz), nextLevel);
-          fluidFalling.delete(fluidKey(nx, y, nz));
-          addActive(nx, y, nz); wakeFluid(nx, y, nz);
-          flowed = true;
-        }
+function setFluidCell(x, y, z, id, level) {
+  if (x < 0 || x >= WORLD_W || y < 0 || y >= MAX_Y || z < 0 || z >= WORLD_D) return;
+  const key = fluidKey(x, y, z);
+  if (isFluid(id)) fluidLevels.set(key, level); else fluidLevels.delete(key);
+  setBlock(x, y, z, id);
+  markFluidChanged(x, z);
+  wakeFluid(x, y, z);
+}
+function isFluidSource(x, y, z) { return getFluidLevel(x, y, z) === 0; }
+function canFluidFlowDown(x, y, z) { return y > 0 && isFluidReplaceable(x, y - 1, z); }
+// Fluid over a drop pours down instead of spreading, and flowing fluid resting on
+// the same fluid merges into it rather than skimming across the surface.
+function fluidSpreadsSideways(x, y, z, id) {
+  if (y === 0) return true;
+  if (isFluidReplaceable(x, y - 1, z)) return false;
+  if (getBlock(x, y - 1, z) === id) return isFluidSource(x, y, z);
+  return true;
+}
+// Level this cell hands to its neighbours; falling columns act like a fresh source.
+function fluidStrength(x, y, z, id) {
+  if (getBlock(x, y + 1, z) === id) return 0;
+  return getFluidLevel(x, y, z);
+}
+function isFlowHole(x, y, z, id) {
+  return y > 0 && (isFluidReplaceable(x, y - 1, z) || getBlock(x, y - 1, z) === id);
+}
+function distanceToDrop(sx, y, sz, ox, oz, id, maxDist) {
+  const seen = new Set([ox + ',' + oz, sx + ',' + sz]);
+  let frontier = [[sx, sz]];
+  for (let d = 1; d <= maxDist && frontier.length; d++) {
+    const next = [];
+    for (const [cx, cz] of frontier) {
+      if (isFlowHole(cx, y, cz, id)) return d;
+      if (d === maxDist) continue;
+      for (const [dx, dz] of FLOW_DIRS) {
+        const nx = cx + dx, nz = cz + dz, k = nx + ',' + nz;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        if (isFluidReplaceable(nx, y, nz) ||
+            (getBlock(nx, y, nz) === id && !isFluidSource(nx, y, nz))) next.push([nx, nz]);
       }
-      if (flowed) addActive(x, y, z);
     }
+    frontier = next;
   }
-  drainCheck(id);
+  return Infinity;
+}
+// Flowing fluid heads toward the nearest drop within reach; on flat ground it spreads evenly.
+function pickFlowDirs(x, y, z, id) {
+  const open = [], paths = [];
+  for (const dir of FLOW_DIRS) {
+    const nx = x + dir[0], nz = z + dir[1];
+    if (isFluidReplaceable(nx, y, nz)) { open.push(dir); paths.push(dir); }
+    else if (getBlock(nx, y, nz) === id && !isFluidSource(nx, y, nz)) paths.push(dir);
+  }
+  if (open.length === 0) return open;
+  const seek = id === WATER ? WATER_SEEK_DIST : LAVA_SEEK_DIST;
+  let best = Infinity;
+  const dists = new Map();
+  for (const dir of paths) {
+    const d = distanceToDrop(x + dir[0], y, z + dir[1], x, z, id, seek);
+    dists.set(dir, d);
+    if (d < best) best = d;
+  }
+  if (best === Infinity) return open;
+  return open.filter(dir => dists.get(dir) === best);
+}
+const FLUID_NEIGHBORS6 = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+function coolLava(x, y, z) {
+  setFluidCell(x, y, z, STONE, 0);
+  spawnSmoke(x + 0.5, y + 0.6, z + 0.5);
 }
 
-function drainCheck(id) {
-  const toRemove = [];
-  for (const [key, level] of fluidLevels) {
-    if (level === 0) continue;
+function tickFluid(id) {
+  if (activeFluids.size === 0) return;
+  const other = id === WATER ? LAVA : WATER;
+  const maxLevel = fluidMaxLevel(id);
+  const toProcess = Array.from(activeFluids);
+  activeFluids.clear();
+  const deferred = [];
+  const fallSteps = new Map();
+
+  for (let i = 0; i < toProcess.length; i++) {
+    const key = toProcess[i];
     const parts = key.split(',');
-    const x = parseInt(parts[0], 10), y = parseInt(parts[1], 10), z = parseInt(parts[2], 10);
-    if (getBlock(x, y, z) !== id) { toRemove.push(key); continue; }
-    let supplied = false;
-    if (getBlock(x, y + 1, z) === id) supplied = true;
-    if (!supplied) {
-      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-      for (const [dx, dz] of dirs) {
-        if (getBlock(x + dx, y, z + dz) === id) {
-          const nLevel = fluidLevels.get(fluidKey(x + dx, y, z + dz));
-          if (nLevel !== undefined && nLevel < level) { supplied = true; break; }
+    const x = +parts[0], y = +parts[1], z = +parts[2];
+    const here = getBlock(x, y, z);
+    if (here !== id) {
+      if (here === other) deferred.push(key);
+      else fluidLevels.delete(key);
+      continue;
+    }
+
+    let touchesOther = false;
+    for (const [dx, dy, dz] of FLUID_NEIGHBORS6) {
+      if (getBlock(x + dx, y + dy, z + dz) !== other) continue;
+      if (id === WATER) coolLava(x + dx, y + dy, z + dz);
+      else touchesOther = true;
+    }
+    if (touchesOther) { coolLava(x, y, z); continue; }
+
+    let level = fluidLevels.get(key) ?? 0;
+    if (level !== 0) {
+      let desired;
+      if (getBlock(x, y + 1, z) === id) desired = 1;
+      else {
+        let best = Infinity, sources = 0;
+        for (const [dx, dz] of FLOW_DIRS) {
+          const nx = x + dx, nz = z + dz;
+          if (getBlock(nx, y, nz) !== id) continue;
+          if (isFluidSource(nx, y, nz)) sources++;
+          if (fluidSpreadsSideways(nx, y, nz, id)) best = Math.min(best, fluidStrength(nx, y, nz, id));
         }
+        desired = best + 1;
+        if (id === WATER && sources >= 2 && !canFluidFlowDown(x, y, z) &&
+            (getBlock(x, y - 1, z) !== WATER || isFluidSource(x, y - 1, z))) desired = 0;
+      }
+      if (desired > maxLevel) { setFluidCell(x, y, z, AIR, 0); continue; }
+      if (desired !== level) {
+        level = desired;
+        fluidLevels.set(key, level);
+        markFluidChanged(x, z);
+        wakeFluid(x, y, z);
+        netSendBlock(x, y, z, id);
       }
     }
-    if (!supplied) toRemove.push(key);
-  }
-  for (const key of toRemove) {
-    const parts = key.split(',');
-    const x = parseInt(parts[0], 10), y = parseInt(parts[1], 10), z = parseInt(parts[2], 10);
-    if (getBlock(x, y, z) === id) {
-      setBlock(x, y, z, AIR);
-      wakeFluid(x, y, z);
-      rebuildAround(x, y, z);
+
+    if (canFluidFlowDown(x, y, z)) {
+      setFluidCell(x, y - 1, z, id, 1);
+      const steps = (fallSteps.get(key) ?? 0) + 1;
+      if (steps < FLUID_FAST_FALL) {
+        const belowKey = fluidKey(x, y - 1, z);
+        fallSteps.set(belowKey, steps);
+        toProcess.push(belowKey);
+      }
+      continue;
     }
-    fluidLevels.delete(key);
-    fluidFalling.delete(key);
+    if (!fluidSpreadsSideways(x, y, z, id)) continue;
+    const next = fluidStrength(x, y, z, id) + 1;
+    if (next > maxLevel) continue;
+    for (const [dx, dz] of pickFlowDirs(x, y, z, id)) setFluidCell(x + dx, y, z + dz, id, next);
   }
+  for (const key of deferred) activeFluids.add(key);
+  flushFluidRebuilds();
 }
 
 function updateFluids(dt) {
@@ -1818,8 +1978,15 @@ function updateFluids(dt) {
   fallingBlockTimer += dt;
   if (fallingBlockTimer >= 0.12) { fallingBlockTimer %= 0.12; tickFallingBlocks(); }
 }
+// A client that takes over the simulation re-checks every flowing cell it knows of.
+function resumeFluidSimulation() {
+  for (const key of fluidLevels.keys()) {
+    const [x, y, z] = key.split(',').map(Number);
+    wakeFluid(x, y, z);
+  }
+}
 function clearFluidState() {
-  fluidLevels.clear(); fluidFalling.clear(); activeFluids.clear();
+  fluidLevels.clear(); activeFluids.clear(); fluidRebuildChunks.clear();
   fallingBlocks.clear();
   waterFlowTimer = 0; lavaFlowTimer = 0; fallingBlockTimer = 0;
 }
@@ -1918,7 +2085,7 @@ function vertexAO(bx, by, bz, dir, corner) {
    ============================================================ */
 const SKY = 0x8fbcd4;
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, TOUCH_MODE ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
 renderer.autoClear = true;
@@ -2056,7 +2223,7 @@ function updateHandTransform(dt) {
     if (handSwingT >= 1) { handSwingT = 0; if (!breaking) handSwingActive = false; }
   }
   const swing = handSwingActive ? Math.sin(handSwingT * Math.PI) : 0;
-  const moving = (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD']) && player.onGround;
+  const moving = hasMoveInput() && player.onGround;
   const swimming = player.inWater;
   if (moving && !swimming) handBobPhase += dt * 9;
   else if (swimming) handBobPhase += dt * 5;
@@ -2798,6 +2965,8 @@ function buildChunk(cx, cz) {
 
         const isWater = (id === WATER);
         const isLava = (id === LAVA);
+        let fluidCovered = false, cornerH = null;
+        if (isWater || isLava) fluidCovered = getBlock(x, y + 1, z) === id;
         for (let f = 0; f < 6; f++) {
           const face = FACES[f];
           const d = face.dir;
@@ -2806,8 +2975,15 @@ function buildChunk(cx, cz) {
           const neighborSolidForCull = isSolid(neighbor) || (neighbor !== AIR && neighbor !== WATER && neighbor !== LAVA);
 
           if (isWater || isLava) {
-            if (neighbor !== AIR && neighbor !== WATER && neighbor !== LAVA) continue;
             if (neighbor === id) continue;
+            const lowTop = d[1] === 1 && !fluidCovered;
+            if (!lowTop && neighbor !== AIR && neighbor !== WATER && neighbor !== LAVA) continue;
+            if (!fluidCovered && !cornerH) {
+              cornerH = [
+                fluidCornerHeight(x, y, z, id),     fluidCornerHeight(x, y, z + 1, id),
+                fluidCornerHeight(x + 1, y, z, id), fluidCornerHeight(x + 1, y, z + 1, id),
+              ];
+            }
           } else {
             if (neighborSolidForCull && !isPlantBlock(neighbor)) continue;
           }
@@ -2823,12 +2999,15 @@ function buildChunk(cx, cz) {
           const start = isWater ? wv : isLava ? lv : ov;
           for (let i = 0; i < 4; i++) {
             const c = face.corners[i];
-            if (isWater) {
-              wPos.push(x + c[0], y + c[1], z + c[2]);
-              wNorm.push(d[0], d[1], d[2]); wv++;
-            } else if (isLava) {
-              lPos.push(x + c[0], y + c[1], z + c[2]);
-              lNorm.push(d[0], d[1], d[2]); lv++;
+            if (isWater || isLava) {
+              const cy = c[1] === 1 && cornerH ? y + cornerH[c[0] * 2 + c[2]] : y + c[1];
+              if (isWater) {
+                wPos.push(x + c[0], cy, z + c[2]);
+                wNorm.push(d[0], d[1], d[2]); wv++;
+              } else {
+                lPos.push(x + c[0], cy, z + c[2]);
+                lNorm.push(d[0], d[1], d[2]); lv++;
+              }
             } else {
               const ao = AO_LEVELS[vertexAO(x, y, z, d, c)];
               const sh = s * ao;
@@ -3152,7 +3331,7 @@ function deserializeChunks(bytes) {
 }
 
 /* Options */
-const defaultOptions = { renderDistance: 6, fov: 75, sensitivity: 100, autoSave: 60, volume: 70, playerName: '' };
+const defaultOptions = { renderDistance: TOUCH_MODE ? 4 : 6, fov: 75, sensitivity: 100, autoSave: 60, volume: 70, playerName: '' };
 let options = { ...defaultOptions };
 function loadOptions() {
   try { const raw = localStorage.getItem(LS_OPTIONS); if (raw) Object.assign(options, JSON.parse(raw)); } catch (e) {}
@@ -3410,7 +3589,7 @@ function die() {
   } else if (NET.role === 'host' && pvpEnabled) {
     broadcast({ t: 'pvp-health', id: 0, health: 0, dead: true });
   }
-  if (document.pointerLockElement) document.exitPointerLock();
+  releaseLock();
   document.getElementById('death-reason').textContent = deathReason;
   setMenuState('death');
   document.body.classList.remove('in-game');
@@ -3445,8 +3624,10 @@ function playerFluidType() {
   return { water: hasWater, lava: hasLava };
 }
 function isHeadInWater() {
-  const b = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + player.eye), Math.floor(player.pos.z));
-  return b === WATER;
+  const ex = Math.floor(player.pos.x), ez = Math.floor(player.pos.z);
+  const eyeY = player.pos.y + player.eye, by = Math.floor(eyeY);
+  if (getBlock(ex, by, ez) !== WATER) return false;
+  return eyeY - by < fluidSurfaceHeight(ex, by, ez, WATER);
 }
 function moveAxis(axis, amount) {
   if (amount === 0) return;
@@ -3622,27 +3803,25 @@ function solidAtBox(x, y, z, h) {
 }
 const DROP_GRAVITY = 26, DROP_MAX_STEP = 0.4, PICKUP_RADIUS = 1.0, PICKUP_DELAY = 0.6;
 
+// Current follows the surface slope toward lower neighbours and open drops.
 function fluidPush(x, y, z) {
   const cur = getBlock(x, y, z);
-  if (cur !== WATER && cur !== LAVA) return { x: 0, z: 0, inFluid: false };
+  if (cur !== WATER && cur !== LAVA) return { x: 0, z: 0, inFluid: false, falling: false };
   const isWater = (cur === WATER);
-  const myLevel = fluidLevels.get(fluidKey(x, y, z)) ?? 0;
+  const falling = getBlock(x, y + 1, z) === cur && !isFluidSource(x, y, z);
+  const myH = fluidSurfaceHeight(x, y, z, cur);
   let pushX = 0, pushZ = 0;
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-  for (const [dx, dz] of dirs) {
+  for (const [dx, dz] of FLOW_DIRS) {
     const nx = x + dx, nz = z + dz;
     const nb = getBlock(nx, y, nz);
-    if (nb === cur) {
-      const nLevel = fluidLevels.get(fluidKey(nx, y, nz)) ?? 0;
-      if (nLevel > myLevel) { pushX += dx; pushZ += dz; }
-    } else if (nb === AIR) {
-      pushX += dx * 0.6;
-      pushZ += dz * 0.6;
-    }
+    let diff = 0;
+    if (nb === cur) diff = myH - fluidSurfaceHeight(nx, y, nz, cur);
+    else if (isFluidReplaceable(nx, y, nz) && isFlowHole(nx, y, nz, cur)) diff = myH;
+    if (diff > 0) { pushX += dx * diff; pushZ += dz * diff; }
   }
   const len = Math.hypot(pushX, pushZ);
   if (len > 0) { pushX /= len; pushZ /= len; }
-  return { x: pushX, z: pushZ, inFluid: true, isWater };
+  return { x: pushX, z: pushZ, inFluid: true, isWater, falling };
 }
 
 function updateDrops(dt) {
@@ -3789,7 +3968,7 @@ document.addEventListener('keydown', e => {
   // Do not feed keystrokes into the game while typing in an input (options, chat)
   if (e.target && e.target.tagName === 'INPUT') {
     if (chatOpen) {
-      if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); closeChat(true); }
+      if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.key === 'Enter') { e.preventDefault(); closeChat(true); }
       else if (e.code === 'Escape') { e.preventDefault(); closeChat(false); }
     }
     return;
@@ -3797,8 +3976,7 @@ document.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space' || e.code === 'ControlLeft' || e.code === 'ControlRight') e.preventDefault();
   if (menuState !== 'game') return;
-  if ((e.code === 'KeyT' || e.code === 'Enter') && NET.role && !inventoryOpen &&
-      document.pointerLockElement === renderer.domElement) {
+  if ((e.code === 'KeyT' || e.code === 'Enter') && NET.role && !inventoryOpen && isLocked()) {
     e.preventDefault(); openChat(); return;
   }
   if (e.code.startsWith('Digit')) {
@@ -3808,46 +3986,64 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyI' || e.code === 'KeyE') { e.preventDefault(); toggleInventory(); return; }
   if (e.code === 'KeyQ' && !inventoryOpen) { e.preventDefault(); dropHeldItem(); return; }
   if (e.code === 'Escape' && inventoryOpen) { closeInventory(); return; }
-  if (e.code === 'Space' && gameMode === 'creative') {
-    const now = performance.now();
-    if (now - lastSpacePress < 300) {
-      flying = !flying;
-      if (flying) { player.vel.y = 0; player.onGround = false; fallStartY = null; playSFX('fly'); }
-      lastSpacePress = 0;
-    } else lastSpacePress = now;
-  }
+  if (e.code === 'Space') handleSpacePress();
 });
+// Double-tapping jump toggles flight in creative.
+function handleSpacePress() {
+  if (gameMode !== 'creative') return;
+  const now = performance.now();
+  if (now - lastSpacePress < 300) {
+    flying = !flying;
+    if (flying) { player.vel.y = 0; player.onGround = false; fallStartY = null; playSFX('fly'); }
+    lastSpacePress = 0;
+  } else lastSpacePress = now;
+}
 document.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => {
   for (const k in keys) keys[k] = false;
   stopBreaking(); mouseDownLeft = false;
 });
+function applyLookDelta(dx, dy, baseSens) {
+  const sens = baseSens * (options.sensitivity / 100);
+  yaw   -= dx * sens;
+  pitch -= dy * sens;
+  const lim = Math.PI / 2 - 0.001;
+  pitch = Math.max(-lim, Math.min(lim, pitch));
+}
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement !== renderer.domElement) return;
   if (menuState !== 'game') return;
-  const sens = 0.0022 * (options.sensitivity / 100);
-  yaw   -= e.movementX * sens;
-  pitch -= e.movementY * sens;
-  const lim = Math.PI / 2 - 0.001;
-  pitch = Math.max(-lim, Math.min(lim, pitch));
+  applyLookDelta(e.movementX, e.movementY, 0.0022);
 });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('mousedown', e => {
+  // Touch input is handled by the on-screen controls; ignore the emulated mouse events.
+  if (TOUCH_MODE) return;
   if (menuState !== 'game' || inventoryOpen) return;
-  if (document.pointerLockElement !== renderer.domElement) { requestLock(); return; }
-  if (e.button === 0) {
-    mouseDownLeft = true;
-    if (pvpTarget) {
-      stopBreaking();
-      requestPvpAttack(pvpTarget.id);
-      triggerSwing();
-      return;
-    }
-    if (target && target.type === 'fish') {
-      killFish(target.fish); target = null; triggerSwing(); return;
-    }
-    if (gameMode === 'creative' && target && target.type === 'block') breakBlock();
-  } else if (e.button === 2) {
+  if (!isLocked()) { requestLock(); return; }
+  if (e.button === 0) primaryActionDown();
+  else if (e.button === 2) secondaryAction();
+});
+// Left click: attack, or start mining (held).
+function primaryActionDown() {
+  if (menuState !== 'game' || inventoryOpen) return;
+  mouseDownLeft = true;
+  if (pvpTarget) {
+    stopBreaking();
+    requestPvpAttack(pvpTarget.id);
+    triggerSwing();
+    return;
+  }
+  if (target && target.type === 'fish') {
+    killFish(target.fish); target = null; triggerSwing(); return;
+  }
+  if (gameMode === 'creative' && target && target.type === 'block') breakBlock();
+}
+function primaryActionUp() { mouseDownLeft = false; stopBreaking(); }
+// Right click: use a block/item, or place.
+function secondaryAction() {
+  if (menuState !== 'game' || inventoryOpen) return;
+  {
     const sneaking = keys['ControlLeft'] || keys['ControlRight'];
     if (target && target.type === 'block') {
       const tid = getBlock(target.x, target.y, target.z);
@@ -3867,7 +4063,6 @@ document.addEventListener('mousedown', e => {
         if (level === 0 || level === undefined) {
           setBlock(target.x, target.y, target.z, AIR);
           fluidLevels.delete(key);
-          fluidFalling.delete(key);
           wakeFluid(target.x, target.y, target.z);
           rebuildAround(target.x, target.y, target.z);
           stack.id = tid === WATER ? WATER_BUCKET : LAVA_BUCKET;
@@ -3893,9 +4088,10 @@ document.addEventListener('mousedown', e => {
     }
     placeBlock(); triggerSwing();
   }
-});
+}
 window.addEventListener('mouseup', e => {
-  if (e.button === 0) { mouseDownLeft = false; stopBreaking(); }
+  if (TOUCH_MODE) return;
+  if (e.button === 0) primaryActionUp();
 });
 document.addEventListener('wheel', e => {
   if (menuState !== 'game' || inventoryOpen) return;
@@ -3937,15 +4133,40 @@ function dropHeldItem() {
   updateHandItem();
 }
 
+// Touch devices have no pointer lock, so "locked" is a flag that the same
+// lock/unlock flow (pause, inventory, chat) toggles.
+let virtualLocked = false;
+function isLocked() {
+  return TOUCH_MODE ? virtualLocked : document.pointerLockElement === renderer.domElement;
+}
 function requestLock() {
+  try { ensureAudio(); } catch (e) {}
+  if (TOUCH_MODE) {
+    try {
+      const root = document.documentElement;
+      if (!document.fullscreenElement && root.requestFullscreen) root.requestFullscreen().catch(() => {});
+    } catch (e) {}
+    if (!virtualLocked) { virtualLocked = true; onLockChange(); }
+    return;
+  }
   try {
-    ensureAudio();
     const p = renderer.domElement.requestPointerLock();
     if (p && p.catch) p.catch(() => {});
   } catch (e) {}
 }
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === renderer.domElement;
+function releaseLock() {
+  if (TOUCH_MODE) {
+    if (virtualLocked) { virtualLocked = false; onLockChange(); }
+    return;
+  }
+  if (document.pointerLockElement) document.exitPointerLock();
+}
+document.addEventListener('pointerlockchange', onLockChange);
+function onLockChange() {
+  const locked = isLocked();
+  document.body.classList.toggle('touch-active', TOUCH_MODE && locked);
+  document.getElementById('t-chat').style.display = NET.role ? '' : 'none';
+  resetTouchInput();
   if (locked) {
     document.body.classList.add('in-game');
     document.body.classList.remove('show-click-play');
@@ -3966,7 +4187,139 @@ document.addEventListener('pointerlockchange', () => {
       else setMenuState('pause');
     }
   }
-});
+}
+
+/* Touch controls: left half is a floating joystick, the rest of the screen
+   drags to look (tap = use/place, hold = mine), plus on-screen buttons. */
+const STICK_RADIUS = 55, STICK_DEADZONE = 0.15;
+const TAP_MAX_MS = 260, TAP_MAX_MOVE = 12, HOLD_MS = 320;
+const TOUCH_LOOK_SENS = 0.0055;
+const touchMove = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
+const touchLook = { id: null, lx: 0, ly: 0, t0: 0, moved: 0, holdTimer: 0, holding: false };
+let touchSprint = false;
+const stickZoneEl = document.getElementById('t-stick');
+const stickBaseEl = document.getElementById('t-stick-base');
+const stickKnobEl = document.getElementById('t-stick-knob');
+const lookZoneEl = document.getElementById('t-look');
+
+function hasMoveInput() {
+  return keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD'] ||
+    (touchMove.id !== null && Math.hypot(touchMove.x, touchMove.y) > STICK_DEADZONE);
+}
+function findTouch(list, id) {
+  for (const t of list) if (t.identifier === id) return t;
+  return null;
+}
+function resetTouchInput() {
+  touchMove.id = null; touchMove.x = touchMove.y = 0; touchSprint = false;
+  stickBaseEl.style.display = 'none';
+  clearTimeout(touchLook.holdTimer);
+  if (touchLook.holding) primaryActionUp();
+  touchLook.id = null; touchLook.holding = false;
+  document.querySelectorAll('.t-btn.on').forEach(el => el.classList.remove('on'));
+}
+
+stickZoneEl.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (touchMove.id !== null) return;
+  const t = e.changedTouches[0];
+  touchMove.id = t.identifier; touchMove.ox = t.clientX; touchMove.oy = t.clientY;
+  touchMove.x = touchMove.y = 0;
+  stickBaseEl.style.left = t.clientX + 'px';
+  stickBaseEl.style.top = t.clientY + 'px';
+  stickBaseEl.style.display = 'block';
+  stickBaseEl.classList.remove('sprint');
+  stickKnobEl.style.transform = '';
+}, { passive: false });
+stickZoneEl.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = findTouch(e.changedTouches, touchMove.id);
+  if (!t) return;
+  let dx = t.clientX - touchMove.ox, dy = t.clientY - touchMove.oy;
+  const dist = Math.hypot(dx, dy);
+  // Pushing well past the rim while heading forward sprints.
+  touchSprint = dist > STICK_RADIUS * 1.3 && dy < -Math.abs(dx);
+  stickBaseEl.classList.toggle('sprint', touchSprint);
+  if (dist > STICK_RADIUS) { dx *= STICK_RADIUS / dist; dy *= STICK_RADIUS / dist; }
+  touchMove.x = dx / STICK_RADIUS; touchMove.y = dy / STICK_RADIUS;
+  stickKnobEl.style.transform = `translate(${dx}px, ${dy}px)`;
+}, { passive: false });
+function endStick(e) {
+  if (!findTouch(e.changedTouches, touchMove.id)) return;
+  touchMove.id = null; touchMove.x = touchMove.y = 0; touchSprint = false;
+  stickBaseEl.style.display = 'none';
+}
+stickZoneEl.addEventListener('touchend', endStick);
+stickZoneEl.addEventListener('touchcancel', endStick);
+
+lookZoneEl.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (touchLook.id !== null) return;
+  const t = e.changedTouches[0];
+  touchLook.id = t.identifier; touchLook.lx = t.clientX; touchLook.ly = t.clientY;
+  touchLook.t0 = performance.now(); touchLook.moved = 0; touchLook.holding = false;
+  clearTimeout(touchLook.holdTimer);
+  touchLook.holdTimer = setTimeout(() => {
+    if (touchLook.id === null || touchLook.moved > TAP_MAX_MOVE) return;
+    touchLook.holding = true;
+    primaryActionDown();
+  }, HOLD_MS);
+}, { passive: false });
+lookZoneEl.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = findTouch(e.changedTouches, touchLook.id);
+  if (!t) return;
+  const dx = t.clientX - touchLook.lx, dy = t.clientY - touchLook.ly;
+  touchLook.lx = t.clientX; touchLook.ly = t.clientY;
+  touchLook.moved += Math.abs(dx) + Math.abs(dy);
+  if (menuState === 'game') applyLookDelta(dx, dy, TOUCH_LOOK_SENS);
+}, { passive: false });
+function endLook(e) {
+  if (!findTouch(e.changedTouches, touchLook.id)) return;
+  clearTimeout(touchLook.holdTimer);
+  if (touchLook.holding) primaryActionUp();
+  else if (e.type === 'touchend' && performance.now() - touchLook.t0 < TAP_MAX_MS &&
+           touchLook.moved < TAP_MAX_MOVE) {
+    if (pvpTarget || (target && target.type === 'fish')) { primaryActionDown(); primaryActionUp(); }
+    else secondaryAction();
+  }
+  touchLook.id = null; touchLook.holding = false;
+}
+lookZoneEl.addEventListener('touchend', endLook);
+lookZoneEl.addEventListener('touchcancel', endLook);
+
+function bindTouchButton(id, onDown, onUp, onTap) {
+  const el = document.getElementById(id);
+  el.addEventListener('touchstart', e => {
+    e.preventDefault();
+    el.classList.add('on');
+    if (onDown) onDown();
+  }, { passive: false });
+  const end = e => {
+    e.preventDefault();
+    if (!el.classList.contains('on')) return;
+    el.classList.remove('on');
+    if (onUp) onUp();
+    if (onTap && e.type === 'touchend') onTap();
+  };
+  el.addEventListener('touchend', end, { passive: false });
+  el.addEventListener('touchcancel', end, { passive: false });
+}
+bindTouchButton('t-jump', () => { keys['Space'] = true; handleSpacePress(); }, () => { keys['Space'] = false; });
+bindTouchButton('t-sneak',
+  () => { keys['ControlLeft'] = true; if (flying) keys['ShiftLeft'] = true; },
+  () => { keys['ControlLeft'] = false; keys['ShiftLeft'] = false; });
+bindTouchButton('t-mine', primaryActionDown, primaryActionUp);
+bindTouchButton('t-use', secondaryAction);
+bindTouchButton('t-pause', null, null, () => releaseLock());
+bindTouchButton('t-inv', null, null, () => toggleInventory());
+bindTouchButton('t-drop', null, null, () => dropHeldItem());
+bindTouchButton('t-chat', null, null, () => openChat());
+document.getElementById('inv-close').addEventListener('click', () => closeInventory());
+if (TOUCH_MODE) {
+  document.querySelector('#click-play .cp-box').textContent = 'TAP TO PLAY';
+  document.getElementById('chat-input').addEventListener('blur', () => { if (chatOpen) closeChat(false); });
+}
 
 /* Screens */
 const screens = {
@@ -3985,7 +4338,7 @@ function setMenuState(s) {
   document.body.classList.toggle('in-game', s === 'game');
   if (s === 'game') {
     crossEl.classList.add('on');
-    if (document.pointerLockElement !== renderer.domElement) {
+    if (!isLocked()) {
       document.body.classList.add('show-click-play');
     } else {
       document.body.classList.remove('show-click-play');
@@ -3997,7 +4350,7 @@ function setMenuState(s) {
   }
   if (s === 'pause') updatePauseUI();
   if (s !== 'game') {
-    if (document.pointerLockElement) document.exitPointerLock();
+    releaseLock();
     invEl.classList.remove('open');
     inventoryOpen = false;
     stopBreaking();
@@ -6541,7 +6894,7 @@ function openFurnace(target) {
   resizeCraftGrid(2);
   invHintEl.innerHTML = '<b>Furnace</b> — smelt ores using coal as fuel.<br>Right-click a placed <b>Crafting Table</b> for 3×3 recipes.';
   renderInventory(); renderCrafting(); renderFurnaceUI(); showInv();
-  if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+  releaseLock();
 }
 
 /* Inventory UI */
@@ -6592,7 +6945,7 @@ function openInventory() {
     '<b>Right-click</b> a craft cell to remove · <b>Click result</b> to craft.<br>' +
     '<b>Tip:</b> press <b>Q</b> to drop · Right-click <b>water/lava</b> with a bucket to pick it up.';
   renderInventory(); renderCrafting(); showInv();
-  if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+  releaseLock();
 }
 function openCraftingTable() {
   if (menuState !== 'game') return;
@@ -6604,7 +6957,7 @@ function openCraftingTable() {
     '<b>Crafting Table</b> — 3×3 grid for pickaxes, furnaces, doors, and buckets.<br>' +
     '<b>Click an item</b> then a cell to place · <b>Right-click</b> a cell to remove.';
   renderInventory(); renderCrafting(); showInv();
-  if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+  releaseLock();
 }
 function closeInventory() {
   returnCraftGridItems(); renderCrafting(); renderHotbar();
@@ -6705,9 +7058,8 @@ function placeBlock() {
     const cur = getBlock(x, y, z);
     if (cur !== AIR) return;
     const fluidId = def.isBucket === 'water' ? WATER : LAVA;
-    setBlock(x, y, z, fluidId);
     fluidLevels.set(fluidKey(x, y, z), 0);
-    fluidFalling.delete(fluidKey(x, y, z));
+    setBlock(x, y, z, fluidId);
     wakeFluid(x, y, z);
     rebuildAround(x, y, z);
     playSFX('bucketEmpty');
@@ -6731,13 +7083,11 @@ function placeBlock() {
     player.pos.z + hw > z && player.pos.z - hw < z + 1;
   if (intersects) return;
   if (remoteIntersects(x, y, z)) return;
+  if (id === WATER || id === LAVA) fluidLevels.set(fluidKey(x, y, z), 0);
   setBlock(x, y, z, id);
+  if (cur === id) netSendBlock(x, y, z, id);
   rebuildAround(x, y, z);
   wakeFluid(x, y, z);
-  if (id === WATER || id === LAVA) {
-    fluidLevels.set(fluidKey(x, y, z), 0);
-    fluidFalling.delete(fluidKey(x, y, z));
-  }
   playSFX('place');
   if (gameMode === 'survival') {
     stack.count--;
@@ -6815,7 +7165,7 @@ function updateDayNight() {
    chunked world: guests re-generate terrain from the seed and
    then apply a sparse edit-log the host diffs from dirty chunks.
    ============================================================ */
-const NET_VERSION = 6;          // must match the Go server
+const NET_VERSION = 7;          // must match the Go server
 const MAX_PLAYERS = 8;
 const EDIT_CHUNK  = 48000;
 function defaultServerAddr() {
@@ -7083,7 +7433,9 @@ function openChat() {
   chatInputEl.style.display = 'block';
   chatInputEl.value = '';
   for (const k in keys) keys[k] = false;
-  if (document.pointerLockElement) document.exitPointerLock();
+  releaseLock();
+  // Mobile browsers only open the keyboard when focus happens inside the tap itself.
+  if (TOUCH_MODE) chatInputEl.focus();
   setTimeout(() => chatInputEl.focus(), 0);
   refreshChatFade();
 }
@@ -7107,12 +7459,23 @@ function broadcast(msg, exceptId) {
 }
 function netSendBlock(x, y, z, id) {
   if (!NET.role || NET.loading) return;
-  if (NET.hostConn && NET.hostConn.open) NET.hostConn.send({ t: 'b', x, y, z, id });
+  if (!NET.hostConn || !NET.hostConn.open) return;
+  const msg = { t: 'b', x, y, z, id };
+  if (isFluid(id)) {
+    const lv = getFluidLevel(x, y, z);
+    if (lv > 0) msg.lv = lv;
+  }
+  NET.hostConn.send(msg);
 }
-function applyNetBlock(x, y, z, id) {
+function applyNetBlock(x, y, z, id, lv) {
   if (!inBounds2(x, y, z)) return;
   const cx = Math.floor(x / CHUNK_SIZE), cz = Math.floor(z / CHUNK_SIZE);
   const key = chunkKey(cx, cz);
+  const fKey = fluidKey(x, y, z);
+  const oldLv = fluidLevels.get(fKey) ?? 0;
+  const newLv = isFluid(id) && Number.isInteger(lv) && lv > 0 ? lv : 0;
+  if (newLv > 0) fluidLevels.set(fKey, newLv);
+  else fluidLevels.delete(fKey);
   // Guests keep far edits pending instead of eagerly generating chunks —
   // this is what makes edits at any distance cheap and correct.
   if (NET.role === 'guest' && !chunkData.has(key)) {
@@ -7124,13 +7487,17 @@ function applyNetBlock(x, y, z, id) {
     return;
   }
   const old = getBlock(x, y, z);
-  if (old === id) return;
+  if (old === id) {
+    if (isFluid(id) && oldLv !== newLv) markFluidChanged(x, z);
+    return;
+  }
   suppressNet = true;
   try { setBlock(x, y, z, id); } finally { suppressNet = false; }
   if (id === AIR && old !== AIR && !isFluid(old) && !isPlantBlock(old)) spawnBreakParticles(x, y, z, old);
-  // Rebuild if this client currently has a mesh for the chunk.
-  // Distance no longer matters: data is always updated, mesh only if present.
-  if (chunkMeshes.has(key)) rebuildAround(x, y, z);
+  // Fluid flow arrives as a stream of small updates, so those chunk rebuilds are
+  // batched once per frame; everything else rebuilds immediately.
+  if (isFluid(id) || isFluid(old)) markFluidChanged(x, z);
+  else if (chunkMeshes.has(key)) rebuildAround(x, y, z);
   if (NET.role !== 'guest' || NET.sim) wakeFluid(x, y, z);
   for (let k = 0; k < 4 && collidesAt(player.pos.x, player.pos.y, player.pos.z); k++) player.pos.y += 1;
 }
@@ -7160,7 +7527,7 @@ function stopNet() {
   NET.role = null; NET.peer = null; NET.code = null; NET.ws = null;
   NET.selfId = null; NET.isOp = false; pvpEnabled = false; pvpTarget = null; NET.sim = false;
   NET.conns = new Map(); NET.hostConn = null; NET.editLog = null;
-  NET.loading = false; NET.queue = []; NET.editBuf = null; NET.chunksLeft = 0;
+  NET.loading = false; NET.queue = []; NET.editBuf = null; NET.fluidBuf = null; NET.chunksLeft = 0;
   NET.welcomeResolve = null; NET.welcomeReject = null; NET.lastKey = '';
   NET.pendingEdits = null;
   if (ws) { try { ws.close(); } catch (e) {} }
@@ -7243,7 +7610,8 @@ function guestOnData(d, sess) {
   if (sess !== NET.session || !d || typeof d !== 'object') return;
   if (d.t === 'welcome') {
     NET.editBuf = new Uint8Array(d.editBytes | 0);
-    NET.chunksLeft = d.chunks | 0;
+    NET.fluidBuf = new Uint8Array(d.fluidBytes | 0);
+    NET.chunksLeft = (d.chunks | 0) + (d.fluidChunks | 0);
     if (NET.welcomeResolve) NET.welcomeResolve(d);
     return;
   }
@@ -7255,6 +7623,12 @@ function guestOnData(d, sess) {
     if (!NET.editBuf) return;
     const u = b64ToBytes(d.d);
     NET.editBuf.set(u, (d.i | 0) * EDIT_CHUNK);
+    NET.chunksLeft--;
+    return;
+  }
+  if (d.t === 'fluid') {
+    if (!NET.fluidBuf) return;
+    NET.fluidBuf.set(b64ToBytes(d.d), (d.i | 0) * EDIT_CHUNK);
     NET.chunksLeft--;
     return;
   }
@@ -7436,7 +7810,7 @@ function guestHandle(d) {
       break;
     }
     case 'b':
-      if ([d.x, d.y, d.z, d.id].every(Number.isInteger)) applyNetBlock(d.x, d.y, d.z, d.id);
+      if ([d.x, d.y, d.z, d.id].every(Number.isInteger)) applyNetBlock(d.x, d.y, d.z, d.id, d.lv);
       break;
     case 'c':
       {
@@ -7484,6 +7858,7 @@ function guestHandle(d) {
     }
     case 'sim':
       NET.sim = d.on === true;   // this client now runs the fluid simulation for everyone
+      if (NET.sim) resumeFluidSimulation();
       break;
     case 'tm':
       if (typeof d.time === 'number') worldTime = d.time;
@@ -7601,6 +7976,16 @@ async function joinGame(code, name) {
         m.set((lz * CHUNK_SIZE + lx) * MAX_Y + y, id);
       }
     }
+    const fb = NET.fluidBuf;
+    if (fb) {
+      for (let o = 0; o + 4 < fb.length; o += 5) {
+        const idx = (fb[o] | (fb[o+1] << 8) | (fb[o+2] << 16) | (fb[o+3] << 24)) >>> 0;
+        if (idx >= WORLD_W * WORLD_D * MAX_Y || fb[o+4] === 0) continue;
+        const { x, y, z } = indexToXYZ(idx);
+        fluidLevels.set(fluidKey(x, y, z), fb[o+4]);
+      }
+    }
+    NET.editBuf = null; NET.fluidBuf = null;
 
     if (welcome.spawn && Number.isFinite(welcome.spawn.x)) {
       SPAWN.set(welcome.spawn.x, welcome.spawn.y, welcome.spawn.z);
@@ -7647,6 +8032,7 @@ async function joinGame(code, name) {
     NET.loading = false;
     const q = NET.queue; NET.queue = [];
     for (const d of q) guestHandle(d);
+    if (NET.sim) resumeFluidSimulation();
 
     setLoadStage('Ready!', 1);
     await sleep(200);
@@ -7731,7 +8117,7 @@ function updateBreaking(dt) {
 }
 
 function update(dt) {
-  const locked = document.pointerLockElement === renderer.domElement;
+  const locked = isLocked();
   const playing = menuState === 'game' && locked;
   if (playing) {
     customFeatureTickTimer += dt;
@@ -7761,6 +8147,7 @@ function update(dt) {
   if (menuState === 'game' || menuState === 'pause') {
     // Guests don't simulate fluids — the host does and broadcasts the results.
     if ((NET.role !== 'guest' || NET.sim) && !netBusy) updateFluids(dt);
+    flushFluidRebuilds();
   }
 
   if (playing) {
@@ -7837,7 +8224,7 @@ function update(dt) {
     if (wantCrouch && !nowInWater && !nowInLava) enterCrouch(); else tryExitCrouch();
 
     sprinting = !flying && !player.crouching && !nowInWater && !nowInLava &&
-                (keys['ShiftLeft'] || keys['ShiftRight']);
+                (keys['ShiftLeft'] || keys['ShiftRight'] || touchSprint);
     let speed = sprinting ? SPRINT_SPD : WALK_SPD;
     if (player.crouching) speed *= CROUCH_MUL;
     if (flying) speed = FLY_SPD;
@@ -7849,14 +8236,18 @@ function update(dt) {
     if (keys['KeyS'] || keys['ArrowDown'])  iz -= 1;
     if (keys['KeyA'] || keys['ArrowLeft'])  ix -= 1;
     if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+    if (touchMove.id !== null && Math.hypot(touchMove.x, touchMove.y) > STICK_DEADZONE) {
+      ix += touchMove.x; iz -= touchMove.y;
+    }
     let vx = 0, vz = 0;
     const len = Math.hypot(ix, iz);
     if (len > 0) {
-      ix /= len; iz /= len;
+      if (len > 1) { ix /= len; iz /= len; }
       const s = Math.sin(yaw), c = Math.cos(yaw);
       vx = (-s * iz + c * ix) * speed;
       vz = (-c * iz - s * ix) * speed;
     }
+    let fluidFallPush = false;
     if (flying) {
       const accel = 14;
       player.vel.x += (vx - player.vel.x) * Math.min(1, accel * dt);
@@ -7873,10 +8264,11 @@ function update(dt) {
       const fx = Math.floor(player.pos.x), fy = Math.floor(player.pos.y), fz = Math.floor(player.pos.z);
       const push = fluidPush(fx, fy, fz);
       if (push.inFluid) {
-        const pushStr = push.isWater ? 0.9 : 0.2;
-        player.vel.x += push.x * pushStr * dt * 2;
-        player.vel.z += push.z * pushStr * dt * 2;
+        const pushStr = push.isWater ? 15 : 2;
+        player.vel.x += push.x * pushStr * dt;
+        player.vel.z += push.z * pushStr * dt;
       }
+      fluidFallPush = push.inFluid && push.isWater && push.falling;
     } else { player.vel.x = vx; player.vel.z = vz; }
 
     if (flying) {
@@ -7903,6 +8295,9 @@ function update(dt) {
       } else {
         const sinkTarget = air > 0 ? -1.6 : -3.2;
         player.vel.y += (sinkTarget - player.vel.y) * Math.min(1, 8 * dt);
+      }
+      if (fluidFallPush) {
+        player.vel.y += (-6 - player.vel.y) * Math.min(1, (keys['Space'] ? 2 : 5) * dt);
       }
     } else {
       if (keys['Space'] && player.onGround) { player.vel.y = JUMP_VEL; player.onGround = false; }
@@ -7931,7 +8326,7 @@ function update(dt) {
       if (voidAccum >= 0.5) { voidAccum = 0; damage(2, 'You fell out of the world'); }
     } else voidAccum = 0;
 
-    const moving = (keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD']) && player.onGround;
+    const moving = hasMoveInput() && player.onGround;
     if (moving && !nowInWater && !nowInLava) {
       player.footstepTimer += dt;
       const interval = sprinting ? 0.28 : 0.45;
