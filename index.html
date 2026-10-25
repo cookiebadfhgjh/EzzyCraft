@@ -130,9 +130,11 @@
   body.touch-mode #inv-close { display: block; }
 
   /* Touch controls */
-  body.touch-mode { touch-action: none; -webkit-user-select: none; user-select: none;
+  body.touch-mode { -webkit-user-select: none; user-select: none;
     -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
   body.touch-mode input { -webkit-user-select: text; user-select: text; }
+  body.touch-mode.touch-active.in-game canvas,
+  body.touch-mode #touch-ui { touch-action: none; }
   #touch-ui { display: none; position: fixed; inset: 0; z-index: 9; pointer-events: none; }
   body.touch-mode.touch-active.in-game #touch-ui { display: block; }
   body.touch-mode #hint { display: none !important; }
@@ -241,6 +243,58 @@
   .furnace-arrow-text { font-size: 18px; opacity: .55; color: #9fe870; margin-top: 2px; }
   .furnace-hint { margin-top: 10px; font-size: 10px; opacity: .55; line-height: 1.5; }
   .furnace-hint b { color: #9fe870; }
+  #inv-touch-hint { display: none; }
+  @media (hover: none) {
+    .craft-cell:hover, .furnace-slot:hover, .craft-result.has-result:hover { transform: none; }
+    .inv-slot:hover:not(.selected) { transform: none; border-color: rgba(255,255,255,.15); box-shadow: none; }
+  }
+  /* Touch: full-screen two-column layout, crafting left and a scrolling item grid right. */
+  body.touch-mode #inventory {
+    padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right))
+      76px max(8px, env(safe-area-inset-left));
+    align-items: stretch; justify-content: stretch; overflow: hidden; touch-action: auto;
+  }
+  body.touch-mode #inventory .inv-panel {
+    flex: 1; width: 100%; max-width: 1100px; margin: 0 auto; padding: 10px 12px 8px;
+    display: flex; flex-direction: column; min-height: 0; height: 100%; max-height: 100%;
+    animation: none; border-radius: 10px;
+  }
+  body.touch-mode #inventory h2 { font-size: 13px; letter-spacing: 3px; margin: 2px 48px 8px; }
+  body.touch-mode #inv-close {
+    top: 6px; right: 6px; width: 44px; height: 44px; z-index: 2;
+    background: rgba(0,0,0,.7); border-color: rgba(255,255,255,.55); font-size: 20px;
+  }
+  body.touch-mode #inv-touch-hint { margin: 0 48px 8px; font-size: 12px; line-height: 1.35; }
+  body.touch-mode .inv-body { display: flex; gap: 12px; flex: 1; min-height: 0; }
+  body.touch-mode .inv-craft-col { flex: 0 0 auto; display: flex; flex-direction: column;
+    justify-content: center; gap: 10px; overflow-y: auto; touch-action: pan-y; }
+  body.touch-mode .inv-items-col { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; touch-action: pan-y;
+    -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-right: 6px; }
+  body.touch-mode .inv-section-title { margin: 0 0 8px; }
+  body.touch-mode .inv-grid { grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 7px; padding: 2px; }
+  body.touch-mode .inv-slot { font-size: 8px; line-height: 1.1; padding: 0; min-height: 58px; }
+  body.touch-mode .inv-slot .lbl { display: none; }
+  body.touch-mode .inv-slot.selected { transform: none; }
+  body.touch-mode .inv-slot .inv-cnt { font-size: 11px; bottom: 2px; right: 4px; }
+  body.touch-mode .crafting-row { margin-bottom: 0; gap: 12px; flex-wrap: nowrap; }
+  body.touch-mode .craft-arrow { font-size: 22px; }
+  body.touch-mode .craft-result { width: 68px; height: 68px; flex-shrink: 0; }
+  body.touch-mode .furnace-section { margin-bottom: 0; padding: 10px; }
+  body.touch-mode .furnace-hint, body.touch-mode #inv-hint { display: none; }
+  body.touch-mode #inv-touch-hint { display: block; }
+  body.touch-mode .furnace-slot { width: 64px; height: 64px; }
+  body.touch-mode .furnace-slot::before {
+    content: attr(data-lbl); position: absolute; top: 3px; left: 0; right: 0; z-index: 2;
+    font-size: 9px; letter-spacing: 1px; opacity: .75; text-align: center;
+    text-shadow: 0 1px 2px #000; pointer-events: none;
+  }
+  body.touch-mode.inv-open #hotbar { z-index: 47; }
+  @media (orientation: portrait) {
+    body.touch-mode .inv-body { flex-direction: column; }
+    body.touch-mode .inv-craft-col { flex: 0 0 auto; overflow: visible; align-items: center; }
+    body.touch-mode .inv-grid { grid-template-columns: repeat(auto-fill, minmax(52px, 1fr)); gap: 6px; }
+    body.touch-mode .inv-slot { min-height: 52px; }
+  }
   .mc-screen { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center;
     justify-content: center; overflow-y: auto; padding: 30px 20px;
     background-repeat: repeat; background-size: 64px 64px; image-rendering: pixelated; }
@@ -379,6 +433,30 @@
   .chat-line.fade { opacity: 0; }
   #chat-log.open .chat-line.fade { opacity: 1; }
   #chat-input { position: fixed; left: 12px; bottom: 100px; width: min(440px, 60vw); z-index: 46; display: none; }
+  #chat-touch-btns { display: none; position: fixed; top: 8px; right: calc(8px + env(safe-area-inset-right));
+    z-index: 46; gap: 6px; }
+  #chat-touch-btns .mc-btn { width: auto; padding: 0 16px; height: 44px; font-size: 13px; }
+  /* In-game messages stay above the hotbar; the composer jumps to the top so the keyboard does not cover it. */
+  body.touch-mode #chat-log {
+    left: calc(8px + env(safe-area-inset-left)); bottom: 118px; top: auto;
+    width: min(72vw, 340px); max-height: 26vh; font-size: 12px;
+  }
+  body.touch-mode.chat-open #chat-touch-btns { display: flex; top: max(8px, env(safe-area-inset-top)); }
+  body.touch-mode.chat-open #chat-input {
+    display: block; top: max(8px, env(safe-area-inset-top)); bottom: auto;
+    left: calc(8px + env(safe-area-inset-left));
+    width: calc(100vw - 168px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    height: 44px; font-size: 16px; z-index: 46;
+  }
+  body.touch-mode.chat-open #hud,
+  body.touch-mode.chat-open #status { display: none; }
+  body.touch-mode.chat-open #chat-log {
+    top: calc(56px + env(safe-area-inset-top)); bottom: auto;
+    width: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
+    max-width: 640px; max-height: min(42vh, 320px); z-index: 46;
+    pointer-events: auto; overflow-y: auto; touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
   #room-box { width: 100%; max-width: 420px; padding: 10px 12px; background: rgba(0,0,0,.6);
     border: 2px solid #000; text-align: center; box-shadow: inset 0 0 20px rgba(0,0,0,.6); }
   #room-box .rb-label { font-size: 10.5px; letter-spacing: 3px; opacity: .6; }
@@ -424,6 +502,10 @@
 
 <div id="chat-log"></div>
 <input class="mc-input" id="chat-input" maxlength="120" placeholder="Say something... (Enter to send, Esc to cancel)" autocomplete="off">
+<div id="chat-touch-btns">
+  <button class="mc-btn accent" id="chat-send">SEND</button>
+  <button class="mc-btn" id="chat-cancel" aria-label="Close chat">✕</button>
+</div>
 
 <div id="click-play">
   <div class="cp-box">CLICK TO PLAY</div>
@@ -448,16 +530,19 @@
   <div class="inv-panel">
     <button id="inv-close" aria-label="Close inventory">✕</button>
     <h2 id="inv-title">INVENTORY</h2>
+    <div class="inv-hint" id="inv-touch-hint"></div>
+    <div class="inv-body">
+    <div class="inv-craft-col">
     <div class="furnace-section" id="furnace-section" style="display:none">
       <div class="furnace-title">FURNACE</div>
       <div class="furnace-row">
-        <div class="furnace-slot" id="furnace-input"></div>
-        <div class="furnace-slot" id="furnace-fuel"></div>
+        <div class="furnace-slot" id="furnace-input" data-lbl="IN"></div>
+        <div class="furnace-slot" id="furnace-fuel" data-lbl="FUEL"></div>
         <div class="furnace-progress">
           <div class="furnace-flame" id="furnace-flame"></div>
           <div class="furnace-arrow-text">→</div>
         </div>
-        <div class="furnace-slot" id="furnace-output"></div>
+        <div class="furnace-slot" id="furnace-output" data-lbl="OUT"></div>
       </div>
       <div class="furnace-hint">
         Put <b>raw ore</b> in Input, <b>coal</b> in Fuel. Smelted ingots appear in Output.
@@ -468,8 +553,12 @@
       <div class="craft-arrow">➜</div>
       <div class="craft-result" id="craft-result"></div>
     </div>
+    </div>
+    <div class="inv-items-col">
     <div class="inv-section-title">YOUR ITEMS</div>
     <div class="inv-grid"></div>
+    </div>
+    </div>
     <div class="inv-hint" id="inv-hint">
       <b>Click an item</b> to select it, then <b>click a craft cell</b> to place it.<br>
       <b>Right-click</b> a craft cell to remove · <b>Click result</b> to craft.
@@ -4190,13 +4279,36 @@ function onLockChange() {
 }
 
 /* Touch controls: left half is a floating joystick, the rest of the screen
-   drags to look (tap = use/place, hold = mine), plus on-screen buttons. */
+   drags to look (tap = use/place, hold still = mine, keep dragging to aim
+   while mining), plus on-screen buttons. MINE/USE can also be dragged to look. */
 const STICK_RADIUS = 55, STICK_DEADZONE = 0.15;
-const TAP_MAX_MS = 260, TAP_MAX_MOVE = 12, HOLD_MS = 320;
+const TAP_MAX_MS = 260, TAP_MAX_MOVE = 12, HOLD_MS = 280, HOLD_START_MAX = 70;
 const TOUCH_LOOK_SENS = 0.0055;
+const CREATIVE_MINE_REPEAT_MS = 250;
 const touchMove = { id: null, ox: 0, oy: 0, x: 0, y: 0 };
-const touchLook = { id: null, lx: 0, ly: 0, t0: 0, moved: 0, holdTimer: 0, holding: false };
+const touchLook = { id: null, lx: 0, ly: 0, ax: 0, ay: 0, t0: 0, moved: 0, holdTimer: 0, holding: false };
 let touchSprint = false;
+// Every finger/button holding "mine" registers here, so letting go of one
+// doesn't stop mining while another is still held.
+const mineHolds = new Set();
+let creativeMineTimer = 0;
+function beginMine(src) {
+  if (mineHolds.has(src)) return;
+  mineHolds.add(src);
+  if (mineHolds.size > 1) return;
+  primaryActionDown();
+  if (gameMode === 'creative') {
+    clearInterval(creativeMineTimer);
+    creativeMineTimer = setInterval(() => {
+      if (target && target.type === 'block') primaryActionDown();
+    }, CREATIVE_MINE_REPEAT_MS);
+  }
+}
+function endMine(src) {
+  if (!mineHolds.delete(src) || mineHolds.size) return;
+  clearInterval(creativeMineTimer);
+  primaryActionUp();
+}
 const stickZoneEl = document.getElementById('t-stick');
 const stickBaseEl = document.getElementById('t-stick-base');
 const stickKnobEl = document.getElementById('t-stick-knob');
@@ -4214,8 +4326,8 @@ function resetTouchInput() {
   touchMove.id = null; touchMove.x = touchMove.y = 0; touchSprint = false;
   stickBaseEl.style.display = 'none';
   clearTimeout(touchLook.holdTimer);
-  if (touchLook.holding) primaryActionUp();
   touchLook.id = null; touchLook.holding = false;
+  if (mineHolds.size) { mineHolds.clear(); clearInterval(creativeMineTimer); primaryActionUp(); }
   document.querySelectorAll('.t-btn.on').forEach(el => el.classList.remove('on'));
 }
 
@@ -4252,17 +4364,20 @@ function endStick(e) {
 stickZoneEl.addEventListener('touchend', endStick);
 stickZoneEl.addEventListener('touchcancel', endStick);
 
+// Hold mostly still to start mining; after that, the same finger can look around.
 lookZoneEl.addEventListener('touchstart', e => {
   e.preventDefault();
   if (touchLook.id !== null) return;
   const t = e.changedTouches[0];
-  touchLook.id = t.identifier; touchLook.lx = t.clientX; touchLook.ly = t.clientY;
+  touchLook.id = t.identifier;
+  touchLook.lx = touchLook.ax = t.clientX; touchLook.ly = touchLook.ay = t.clientY;
   touchLook.t0 = performance.now(); touchLook.moved = 0; touchLook.holding = false;
   clearTimeout(touchLook.holdTimer);
   touchLook.holdTimer = setTimeout(() => {
-    if (touchLook.id === null || touchLook.moved > TAP_MAX_MOVE) return;
+    if (touchLook.id === null || touchLook.holding) return;
+    if (touchLook.moved > HOLD_START_MAX) return;
     touchLook.holding = true;
-    primaryActionDown();
+    beginMine('look');
   }, HOLD_MS);
 }, { passive: false });
 lookZoneEl.addEventListener('touchmove', e => {
@@ -4277,26 +4392,44 @@ lookZoneEl.addEventListener('touchmove', e => {
 function endLook(e) {
   if (!findTouch(e.changedTouches, touchLook.id)) return;
   clearTimeout(touchLook.holdTimer);
-  if (touchLook.holding) primaryActionUp();
+  if (touchLook.holding) endMine('look');
   else if (e.type === 'touchend' && performance.now() - touchLook.t0 < TAP_MAX_MS &&
            touchLook.moved < TAP_MAX_MOVE) {
-    if (pvpTarget || (target && target.type === 'fish')) { primaryActionDown(); primaryActionUp(); }
-    else secondaryAction();
+    if (pvpTarget || (target && target.type === 'fish')) {
+      primaryActionDown();
+      if (!mineHolds.size) primaryActionUp();
+    } else secondaryAction();
   }
   touchLook.id = null; touchLook.holding = false;
 }
 lookZoneEl.addEventListener('touchend', endLook);
 lookZoneEl.addEventListener('touchcancel', endLook);
 
-function bindTouchButton(id, onDown, onUp, onTap) {
+// lookDrag: sliding the finger off the button keeps turning the camera.
+function bindTouchButton(id, onDown, onUp, onTap, lookDrag) {
   const el = document.getElementById(id);
+  let touchId = null, lx = 0, ly = 0;
   el.addEventListener('touchstart', e => {
     e.preventDefault();
+    if (el.classList.contains('on')) return;
+    const t = e.changedTouches[0];
+    touchId = t.identifier; lx = t.clientX; ly = t.clientY;
     el.classList.add('on');
     if (onDown) onDown();
   }, { passive: false });
+  if (lookDrag) {
+    el.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const t = findTouch(e.changedTouches, touchId);
+      if (!t) return;
+      if (menuState === 'game') applyLookDelta(t.clientX - lx, t.clientY - ly, TOUCH_LOOK_SENS);
+      lx = t.clientX; ly = t.clientY;
+    }, { passive: false });
+  }
   const end = e => {
     e.preventDefault();
+    if (!findTouch(e.changedTouches, touchId)) return;
+    touchId = null;
     if (!el.classList.contains('on')) return;
     el.classList.remove('on');
     if (onUp) onUp();
@@ -4309,8 +4442,8 @@ bindTouchButton('t-jump', () => { keys['Space'] = true; handleSpacePress(); }, (
 bindTouchButton('t-sneak',
   () => { keys['ControlLeft'] = true; if (flying) keys['ShiftLeft'] = true; },
   () => { keys['ControlLeft'] = false; keys['ShiftLeft'] = false; });
-bindTouchButton('t-mine', primaryActionDown, primaryActionUp);
-bindTouchButton('t-use', secondaryAction);
+bindTouchButton('t-mine', () => beginMine('button'), () => endMine('button'), null, true);
+bindTouchButton('t-use', secondaryAction, null, null, true);
 bindTouchButton('t-pause', null, null, () => releaseLock());
 bindTouchButton('t-inv', null, null, () => toggleInventory());
 bindTouchButton('t-drop', null, null, () => dropHeldItem());
@@ -4319,6 +4452,17 @@ document.getElementById('inv-close').addEventListener('click', () => closeInvent
 if (TOUCH_MODE) {
   document.querySelector('#click-play .cp-box').textContent = 'TAP TO PLAY';
   document.getElementById('chat-input').addEventListener('blur', () => { if (chatOpen) closeChat(false); });
+  const vv = window.visualViewport;
+  if (vv) {
+    vv.addEventListener('resize', layoutTouchChat);
+    vv.addEventListener('scroll', layoutTouchChat);
+  }
+  // touchstart is cancelled so the input keeps focus (a blur would close chat before the tap lands).
+  for (const [id, send] of [['chat-send', true], ['chat-cancel', false]]) {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    el.addEventListener('touchend', e => { e.preventDefault(); if (chatOpen) closeChat(send); }, { passive: false });
+  }
 }
 
 /* Screens */
@@ -4356,8 +4500,22 @@ function setMenuState(s) {
     stopBreaking();
   }
 }
-function showInv() { invEl.classList.add('open'); inventoryOpen = true; }
-function hideInv() { invEl.classList.remove('open'); inventoryOpen = false; }
+function touchInvHint() {
+  const picked = craftSelectedId != null ? (BLOCK_TYPES[craftSelectedId]?.name || '') : '';
+  const pick = picked ? `Selected: <b>${picked}</b>. ` : '';
+  if (currentFurnaceKey) return pick + 'Tap <b>IN</b> or <b>FUEL</b> · Tap <b>OUT</b> to collect.';
+  if (gameMode === 'creative') return 'Tap a <b>hotbar slot</b> below, then tap an item to put it there.';
+  return pick + 'Tap an item, then a <b>grid cell</b> · Tap a filled cell to take it back · Tap the <b>result</b> to craft.';
+}
+function showInv() {
+  document.getElementById('inv-touch-hint').innerHTML = touchInvHint();
+  invEl.classList.add('open'); inventoryOpen = true;
+  document.body.classList.add('inv-open');
+}
+function hideInv() {
+  invEl.classList.remove('open'); inventoryOpen = false;
+  document.body.classList.remove('inv-open');
+}
 
 /* Loading */
 const loadingEl = document.getElementById('loading');
@@ -6734,8 +6892,8 @@ function resizeCraftGrid(size) {
   returnCraftGridItems();
   craftGridSize = size;
   craftGrid = new Array(size * size).fill(null);
-  const cellSizes = { 2: 48, 3: 42 };
-  const cellSize = cellSizes[size] || 42;
+  const cellSizes = TOUCH_MODE ? { 2: 64, 3: 56 } : { 2: 48, 3: 42 };
+  const cellSize = cellSizes[size] || (TOUCH_MODE ? 56 : 42);
   const gap = 4, padding = 8;
   const totalWidth = size * cellSize + (size - 1) * gap + 2 * padding;
   craftGridEl.style.width = totalWidth + 'px';
@@ -6932,6 +7090,7 @@ function renderInventory() {
     });
     invGrid.appendChild(el);
   });
+  if (TOUCH_MODE && inventoryOpen) document.getElementById('inv-touch-hint').innerHTML = touchInvHint();
 }
 function toggleInventory() { if (inventoryOpen) closeInventory(); else openInventory(); }
 function openInventory() {
@@ -7425,11 +7584,24 @@ function resetChatUI() {
   chatInputEl.style.display = 'none';
   chatInputEl.blur();
   chatLogEl.classList.remove('open');
+  document.body.classList.remove('chat-open');
+  chatInputEl.style.top = '';
+  chatLogEl.style.top = '';
+  document.getElementById('chat-touch-btns').style.top = '';
+}
+function layoutTouchChat() {
+  if (!TOUCH_MODE || !chatOpen) return;
+  const vv = window.visualViewport;
+  const top = Math.round((vv ? vv.offsetTop : 0) + 8);
+  chatInputEl.style.top = top + 'px';
+  document.getElementById('chat-touch-btns').style.top = top + 'px';
+  chatLogEl.style.top = (top + 48) + 'px';
 }
 function openChat() {
   if (!NET.role || chatOpen) return;
   chatOpen = true;
   chatLogEl.classList.add('open');
+  document.body.classList.add('chat-open');
   chatInputEl.style.display = 'block';
   chatInputEl.value = '';
   for (const k in keys) keys[k] = false;
@@ -7437,6 +7609,7 @@ function openChat() {
   // Mobile browsers only open the keyboard when focus happens inside the tap itself.
   if (TOUCH_MODE) chatInputEl.focus();
   setTimeout(() => chatInputEl.focus(), 0);
+  layoutTouchChat();
   refreshChatFade();
 }
 function closeChat(send) {
