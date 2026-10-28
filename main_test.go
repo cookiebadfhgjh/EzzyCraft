@@ -259,6 +259,63 @@ func TestPvPKnockbackPersistsIncludingDisabled(t *testing.T) {
 	}
 }
 
+func TestFluidLevelsRelayAndPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "world.json")
+	sender := &player{id: 1, send: make(chan []byte, 8)}
+	other := &player{id: 2, send: make(chan []byte, 8)}
+	s := &server{
+		savePath: path, mode: "survival",
+		edits: map[uint32]uint8{}, fluid: map[uint32]uint8{},
+		players: map[int]*player{1: sender, 2: other},
+	}
+	next := func() map[string]any {
+		t.Helper()
+		select {
+		case b := <-other.send:
+			var out map[string]any
+			if err := json.Unmarshal(b, &out); err != nil {
+				t.Fatal(err)
+			}
+			return out
+		default:
+			return nil
+		}
+	}
+	idx := voxelIndex(5, 10, 6)
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 3})
+	if msg := next(); msg == nil || msg["lv"] != float64(3) {
+		t.Fatalf("flowing water broadcast = %v, want lv 3", msg)
+	}
+	if s.fluid[idx] != 3 {
+		t.Fatalf("stored level = %d, want 3", s.fluid[idx])
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 3})
+	if msg := next(); msg != nil {
+		t.Fatalf("unchanged update was rebroadcast: %v", msg)
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: blockWater, Lv: 1})
+	if msg := next(); msg == nil || msg["lv"] != float64(1) {
+		t.Fatalf("level-only change broadcast = %v, want lv 1", msg)
+	}
+
+	s.save(true)
+	loaded := &server{savePath: path, edits: map[uint32]uint8{}}
+	if !loaded.load() || loaded.fluid[idx] != 1 {
+		t.Fatalf("loaded level = %d, want 1", loaded.fluid[idx])
+	}
+
+	s.onBlock(sender, &inMsg{T: "b", X: 5, Y: 10, Z: 6, ID: 3, Lv: 4})
+	if msg := next(); msg == nil || msg["lv"] != nil {
+		t.Fatalf("stone broadcast = %v, want no lv", msg)
+	}
+	if _, ok := s.fluid[idx]; ok {
+		t.Fatal("level kept after fluid was replaced by stone")
+	}
+}
+
 func TestHandleSettingsRequiresOperatorAndBroadcasts(t *testing.T) {
 	member := &player{send: make(chan []byte, 8)}
 	s := &server{
@@ -449,6 +506,72 @@ func TestHandlePacksRequiresCodePersistsAndBroadcasts(t *testing.T) {
 		!strings.Contains(getResponse.Body.String(), `"id":"test_pack"`) ||
 		!strings.Contains(getResponse.Body.String(), `"id":"second_pack"`) {
 		t.Fatalf("GET response = %d %q, want both independently persisted packs", getResponse.Code, getResponse.Body.String())
+	}
+}
+
+func TestHandleModsLoadAndUnloadByFilename(t *testing.T) {
+	dir := t.TempDir()
+	pack := `{"schema":"coop1.10.item-block-pack.v2","id":"cool_swords","name":"Cool Swords","entries":[{"type":"feature","name":"chat","event":"onChat","handler":"chat"}],"javascript":{"runtime":"coop1.10.pack-javascript.v1","source":"({features:{chat(){}}})"}}`
+	if err := os.WriteFile(filepath.Join(dir, "cool-swords.json"), []byte(pack), 0o644); err != nil {
+		t.Fatalf("write catalog file: %v", err)
+	}
+	recipient := &player{send: make(chan []byte, 4)}
+	s := &server{
+		modsDir:      dir,
+		activePath:   filepath.Join(dir, "active-mods.json"),
+		operatorCode: "test-code",
+		players:      map[int]*player{1: recipient},
+	}
+
+	catalog := httptest.NewRecorder()
+	s.handleMods(catalog, httptest.NewRequest(http.MethodGet, "/api/mods", nil))
+	if catalog.Code != http.StatusOK || !strings.Contains(catalog.Body.String(), `"file":"cool-swords.json"`) ||
+		!strings.Contains(catalog.Body.String(), `"active":false`) {
+		t.Fatalf("catalog GET = %d %q, want inactive cool-swords.json", catalog.Code, catalog.Body.String())
+	}
+
+	unauthorized := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords"}`))
+	unauthorizedResponse := httptest.NewRecorder()
+	s.handleMods(unauthorizedResponse, unauthorized)
+	if unauthorizedResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized load status = %d, want %d", unauthorizedResponse.Code, http.StatusUnauthorized)
+	}
+
+	load := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords"}`))
+	load.Header.Set("X-Server-Op-Code", "test-code")
+	loaded := httptest.NewRecorder()
+	s.handleMods(loaded, load)
+	if loaded.Code != http.StatusOK || !strings.Contains(loaded.Body.String(), `"kind":"pack"`) {
+		t.Fatalf("load status = %d %q, want pack payload", loaded.Code, loaded.Body.String())
+	}
+	if message := string(<-recipient.send); !strings.Contains(message, `"t":"pack"`) {
+		t.Fatalf("load broadcast = %q, want pack message", message)
+	}
+
+	activePacks := httptest.NewRecorder()
+	s.handlePacks(activePacks, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
+	if activePacks.Code != http.StatusOK || !strings.Contains(activePacks.Body.String(), `"id":"cool_swords"`) {
+		t.Fatalf("active packs = %d %q, want loaded pack", activePacks.Code, activePacks.Body.String())
+	}
+
+	unload := httptest.NewRequest(http.MethodPost, "/api/mods", strings.NewReader(`{"file":"cool-swords.json","action":"unload"}`))
+	unload.Header.Set("X-Server-Op-Code", "test-code")
+	unloaded := httptest.NewRecorder()
+	s.handleMods(unloaded, unload)
+	if unloaded.Code != http.StatusOK || !strings.Contains(unloaded.Body.String(), `"removed":true`) {
+		t.Fatalf("unload status = %d %q, want removed", unloaded.Code, unloaded.Body.String())
+	}
+	if message := string(<-recipient.send); !strings.Contains(message, `"t":"pack-remove"`) {
+		t.Fatalf("unload broadcast = %q, want pack-remove", message)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cool-swords.json")); err != nil {
+		t.Fatalf("catalog file was deleted on unload: %v", err)
+	}
+
+	emptyPacks := httptest.NewRecorder()
+	s.handlePacks(emptyPacks, httptest.NewRequest(http.MethodGet, "/api/packs", nil))
+	if emptyPacks.Code != http.StatusOK || strings.Contains(emptyPacks.Body.String(), `"id":"cool_swords"`) {
+		t.Fatalf("packs after unload = %d %q, want empty active set", emptyPacks.Code, emptyPacks.Body.String())
 	}
 }
 

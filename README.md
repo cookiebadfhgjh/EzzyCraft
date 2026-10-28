@@ -8,7 +8,7 @@ Build the server with `build.bat`, then start it with an operator code:
 .\mcserver.exe -op-code "your-private-code"
 ```
 
-Open the server address in a browser. If you use a separate game page, enter the target server address in **Join Online Game** before opening **Options...**; operator settings and imports use the connected server or that address. Enter the operator code and choose **Unlock Server Settings** to import item, block, or complete pack JSON files. The server pack dashboard lists every shared pack and whether it is active or failed to load; **Refresh / Load** reloads all server packs together. Multiple packs stay active at once when they have different pack IDs and non-conflicting item/block IDs and texture tiles. Without `-op-code`, server settings and imports remain disabled.
+Open the server address in a browser. If you use a separate game page, enter the target server address in **Join Online Game** before opening **Options...**; operator settings use the connected server or that address. Add pack or item JSON files to the repo `mods` folder and commit them. Enter the operator code, choose **Unlock Server Settings**, type the filename, and choose **Load**. The dashboard lists every committed file and whether it is active; **Remove** unloads it without deleting the file. **Refresh** reloads the catalog and any mods that are already active. Multiple mods stay active at once when they have different pack IDs and non-conflicting item/block IDs and texture tiles. Without `-op-code`, server settings and the mod manager stay locked.
 
 The unlocked server settings also let an operator set the shared game mode, world time, and PvP. The first player to join is a chat operator; operators can promote other players with `/op <player>`.
 
@@ -24,7 +24,7 @@ Type these in online chat (`T`). Only operators can change server settings or us
 - `/op <player>`, `/deop <player>`
 - `/tp <player>` (teleports you to that player)
 
-Shared definitions are stored in `server_data\definitions`, and complete packs (including their one shared JavaScript module) are stored in `server_data\packs`, next to the server's working directory. The server creates these folders automatically, sends the saved content to joining players, and broadcasts pack/definition updates to players already connected. In online play, dropped items and custom projectiles are shared world objects. Projectile launches, movement, and removal are relayed by the server; the launching player checks collisions and runs the impact hook once. Dropped items are shared and the server coordinates item counts so the same drop cannot be collected twice. Custom behavior calls to `api.world.spawnDrop` use the same shared-drop path. Use HTTPS when exposing the server publicly so the operator code is protected in transit.
+Committed mods live in the repo `mods` folder. The server lists those JSON files, plus any leftover files in `server_data\definitions` and `server_data\packs`. Only filenames you load stay active; that set is saved in `server_data\active-mods.json`. Joining players receive the active mods, and load or remove updates are broadcast to players already connected. In online play, dropped items and custom projectiles are shared world objects. Projectile launches, movement, and removal are relayed by the server; the launching player checks collisions and runs the impact hook once. Dropped items are shared and the server coordinates item counts so the same drop cannot be collected twice. Custom behavior calls to `api.world.spawnDrop` use the same shared-drop path. Use HTTPS when exposing the server publicly so the operator code is protected in transit.
 
 ## Co-op Sprite Studio
 
@@ -37,7 +37,7 @@ Open `Other\coop-sprite-studio.html` to draw sprites and create custom tools, we
 - Set the display name, numeric registry ID, internal key, inventory category, and custom atlas tile for a tool or block.
 - Add an optional binary glTF `.glb` mesh (up to 20 MB). The editor previews the model and embeds it in exports.
 - Define crafting or smelting recipes: shaped patterns, shapeless ingredients, output count, crafting station/grid size, furnace input, and smelting duration.
-- Export a definition as standalone HTML, definition JSON, or game-integration JavaScript. Export the current multi-entry pack as pack JSON. The editor can also import definition JSON to continue editing a definition.
+- Export a definition as standalone HTML, definition JSON, or game-integration JavaScript. Export the current multi-entry pack as pack JSON, then copy that JSON into the repo `mods` folder and commit it. The editor can also import definition JSON to continue editing a definition.
 
 ### Tool and weapon properties
 
@@ -281,6 +281,6 @@ Online player combat and shared time remain server-authoritative. Pack code runs
 
 ## Render
 
-Do not put the operator code in the source code or in a public Render start command. In the Render dashboard, open your service's **Environment** settings and add a secret environment variable named `EZZYCRAFT_OP_CODE`. Set its value to a private code, save the change, and redeploy the service. The in-game **Options...** screen must be opened from that Render server's URL; enter the same value to unlock the import button.
+Do not put the operator code in the source code or in a public Render start command. In the Render dashboard, open your service's **Environment** settings and add a secret environment variable named `EZZYCRAFT_OP_CODE`. Set its value to a private code, save the change, and redeploy the service. The in-game **Options...** screen must be opened from that Render server's URL; enter the same value to unlock the mod manager.
 
-The server also uses Render's `PORT` environment variable for its listen port. After updating EzzyCraft, rebuild and redeploy the server and its embedded game page together; both must use the same co-op protocol version for shared dropped items and projectiles to work. To keep imported definitions and packs across redeploys, attach a persistent disk and set `-definitions-dir` and `-packs-dir` to folders on that disk using the service's start command.
+The server also uses Render's `PORT` environment variable for its listen port. After updating EzzyCraft, rebuild and redeploy the server and its embedded game page together; both must use the same co-op protocol version for shared dropped items and projectiles to work. Committed files in `mods` travel with the repo. To keep the active-mod list across redeploys, attach a persistent disk and set the working directory or `-save` path so `server_data\active-mods.json` lands on that disk.
