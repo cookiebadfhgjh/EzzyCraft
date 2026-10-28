@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pack Block Editor</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #e6f0ff; color: #575e75; font-family: Helvetica, Arial, sans-serif; }
+  button, select, input { font: inherit; }
+  button, [role="button"] { cursor: pointer; }
+  header { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 12px; background: #fff; border-bottom: 1px solid #d0d8e6; }
+  header h1 { margin: 0; font-size: 14px; }
+  header p { margin: 0; font-size: 12px; color: #7a8499; }
+  .mark { width: 32px; height: 32px; border-radius: 6px; background: #ffbf00; color: #fff; font-weight: 900; display: grid; place-items: center; flex-shrink: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .grow p, .grow h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flag { height: 32px; border: 0; border-radius: 999px; background: #4cbf56; color: #fff; font-weight: 700; padding: 0 12px; }
+  .flag.blue { background: #4c97ff; }
+  .flag.gray { background: #7a8499; }
+  .trash { min-width: 88px; height: 32px; border: 2px dashed #d0d8e6; border-radius: 8px; background: #f6f8fc; color: #7a8499; font-weight: 700; font-size: 12px; display: grid; place-items: center; }
+  .trash.drop-on { border-color: #ff6680; background: #ffe6eb; color: #ff6680; }
+  .tabs { display: none; background: #fff; border-bottom: 1px solid #d0d8e6; }
+  .tabs button { height: 44px; flex: 1; border: 0; background: transparent; font-weight: 700; color: #7a8499; }
+  .tabs button.on { color: #4c97ff; }
+  .app { display: grid; height: calc(100% - 48px); grid-template-columns: 72px 250px minmax(0, 1fr) 300px; min-height: 0; }
+  nav.cats { background: #fff; padding: 6px; display: flex; flex-direction: column; gap: 4px; overflow: auto; }
+  .sb-cat { display: flex; width: 100%; min-height: 52px; align-items: center; justify-content: center; color: #fff; border: 0; border-radius: 6px; font-size: 10px; font-weight: 700; }
+  .sb-cat.on { outline: 3px solid rgba(255,255,255,.9); outline-offset: -5px; }
+  aside.fly, aside.code { background: #fff; min-height: 0; overflow: auto; }
+  aside.fly { border-right: 1px solid #d6e2f2; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  aside.code { border-left: 1px solid #d0d8e6; display: flex; flex-direction: column; }
+  aside.code p { margin: 0; padding: 8px 12px; border-bottom: 1px solid #e6ebf2; font-size: 12px; font-weight: 700; color: #7a8499; }
+  pre { margin: 0; padding: 12px; overflow: auto; font: 11px/1.45 ui-monospace, monospace; color: #394056; white-space: pre-wrap; }
+  main { min-height: 0; overflow: auto; padding: 24px; background-color: #e6f0ff; background-image: radial-gradient(#c5d6ee 1.2px, transparent 1.2px); background-size: 20px 20px; }
+  main.drop-on { outline: 3px dashed #4c97ff; outline-offset: -8px; }
+  .scripts { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 36px; }
+  .hint { font-size: 12px; font-weight: 700; color: #7a8499; margin: 0 0 4px; }
+  .sb { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 40px; margin: -4px 0 0; padding: 7px 14px 10px 10px; color: #fff; background: var(--sb, #4c97ff); border: 0; border-radius: 4px; font-size: 13px; font-weight: 700; text-align: left; box-shadow: 0 2px 0 rgba(0,0,0,.18); cursor: grab; user-select: none; touch-action: none; }
+  .sb:active { cursor: grabbing; }
+  .sb::after { content: ""; position: absolute; left: 16px; bottom: -7px; width: 22px; height: 9px; background: var(--sb, #4c97ff); border-radius: 0 0 8px 8px; z-index: 1; }
+  .sb-hat { margin-top: 0; padding-top: 12px; border-radius: 18px 18px 4px 4px; cursor: pointer; }
+  .sb-c { display: block; padding-bottom: 14px; }
+  .sb-c::after { display: none; }
+  .sb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; }
+  .sb-mouth { min-height: 40px; margin: 8px 6px 4px 16px; padding: 6px 4px 10px; background: rgba(0,0,0,.18); border-radius: 6px 12px 12px 6px; }
+  .sb input, .sb select { height: 22px; max-width: 140px; padding: 0 8px; color: #575e75; background: #fff; border: 0; border-radius: 11px; font-size: 12px; font-weight: 700; cursor: text; touch-action: auto; }
+  .wide { max-width: 180px !important; }
+  .sb-x { margin-left: auto; width: 18px; height: 18px; color: #fff; background: rgba(0,0,0,.18); border: 0; border-radius: 50%; cursor: pointer; flex-shrink: 0; }
+  .script { padding: 6px; border-radius: 10px; min-width: 220px; }
+  .script.on { outline: 3px solid #ffd500; outline-offset: 2px; }
+  .script.drop-on { outline: 3px solid #4c97ff; outline-offset: 2px; }
+  .pill { border-radius: 999px; background: rgba(255,255,255,.3); padding: 1px 8px; font-size: 11px; }
+  .drop-slot { height: 6px; margin: 0 10px; border-radius: 6px; }
+  body.is-dragging .drop-slot { height: 14px; background: rgba(76,151,255,.18); }
+  body.is-dragging .sb input, body.is-dragging .sb select, body.is-dragging .sb-x { pointer-events: none; }
+  .drop-slot.drop-on, .sb.drop-on, .sb-mouth.drop-on { background: #ffd500; outline: 2px solid #ffbf00; }
+  .sb.drop-on { filter: brightness(1.08); }
+  .sb.dragging { opacity: .45; }
+  .ghost { position: fixed; pointer-events: none; z-index: 80; opacity: .92; margin: 0; max-width: 380px; box-shadow: 0 10px 22px rgba(0,0,0,.28); }
+  .fly .sb { cursor: grab; }
+  .empty { margin: 8px; color: #fff; font-size: 12px; font-weight: 700; opacity: .85; }
+  @media (max-width: 900px) {
+    .tabs { display: flex; }
+    .app { grid-template-columns: 1fr; height: calc(100% - 92px); }
+    nav.cats, aside.fly, main, aside.code { display: none; }
+    body[data-panel="palette"] nav.cats, body[data-panel="palette"] aside.fly,
+    body[data-panel="stacks"] main, body[data-panel="code"] aside.code { display: flex; }
+    body[data-panel="palette"] nav.cats { flex-direction: row; flex-wrap: wrap; }
+    .sb-cat { width: 72px; }
+    main { display: block; }
+  }
+</style>
+</head>
+<body data-panel="stacks">
+<header>
+  <div class="mark">B</div>
+  <div class="grow">
+    <h1>Pack Blocks</h1>
+    <p id="notice">Drag a block onto a hat or onto the back of another block.</p>
+  </div>
+  <div class="trash" id="trash">Drop to delete</div>
+  <button class="flag gray" id="undo" type="button">Undo</button>
+  <button class="flag" id="copy" type="button">Copy code</button>
+  <button class="flag blue" id="save" type="button">Download JS</button>
+</header>
+<div class="tabs">
+  <button data-panel="palette">Blocks</button>
+  <button data-panel="stacks" class="on">Scripts</button>
+  <button data-panel="code">Code</button>
+</div>
+<div class="app">
+  <nav class="cats" id="cats"></nav>
+  <aside class="fly" id="fly"></aside>
+  <main id="board"><div class="scripts" id="scripts"></div></main>
+  <aside class="code"><p>Generated JavaScript</p><pre id="code"></pre></aside>
+</div>
+<script>
+const HOOKS = [
+  ["onUse", "used"], ["onHit", "hit"], ["onBlockUse", "block used"],
+  ["onBlockBreak", "block broken"], ["onBlockPlace", "block placed"],
+  ["onTick", "held"], ["onProjectileHit", "projectile hits"]
+];
+const FEATURE_EVENTS = [
+  ["onChat", "chat message"], ["onTick", "game tick"],
+  ["onPlayerJoin", "player joins"], ["onPlayerLeave", "player leaves"]
+];
+const SOUNDS = ["pickup", "click", "break", "place", "hit", "hurt", "splash", "swim", "footstep", "lavaPop", "sizzle", "drown", "gasp"];
+const PARTICLES = ["smoke", "bubble", "water", "lava", "break"];
+const EVENT_TYPES = ["item", "player", "block-use", "block", "projectile-hit", "tick", "chat", "player-join", "player-leave"];
+const OPS = ["===", "!==", "<", "<=", ">", ">="];
+const CMP = [
+  ["message", "chat"], ["sender", "sender"], ["eventType", "event type"],
+  ["time", "time"], ["health", "health"], ["dt", "tick"],
+  ["px", "player x"], ["py", "player y"], ["pz", "player z"]
+];
+const CATS = [
+  ["events", "Events", "#ffbf00"], ["sound", "Sound", "#cf63cf"], ["motion", "Motion", "#4c97ff"],
+  ["looks", "World", "#9966ff"], ["sensing", "Sensing", "#5cb1d6"],
+  ["control", "Control", "#ffab19"], ["myblocks", "My Blocks", "#ff6680"]
+];
+const ACTIONS = [
+  ["playSound", "play sound", "sound", "#cf63cf"],
+  ["particle", "particle", "looks", "#9966ff"],
+  ["heal", "heal", "motion", "#4c97ff"],
+  ["damage", "damage", "motion", "#4c97ff"],
+  ["velocity", "push", "motion", "#4c97ff"],
+  ["giveItem", "give item", "looks", "#9966ff"],
+  ["setBlock", "set block", "looks", "#9966ff"],
+  ["spawnDrop", "drop item", "looks", "#9966ff"],
+  ["setTime", "set time", "looks", "#9966ff"],
+  ["launch", "launch projectile", "looks", "#9966ff"],
+  ["rayIf", "if looking at", "sensing", "#5cb1d6"],
+  ["if", "if <> then", "control", "#ffab19"],
+  ["repeat", "repeat", "control", "#ffab19"],
+  ["returnHit", "hit power", "control", "#ffab19"],
+  ["callService", "call", "myblocks", "#ff6680"]
+];
+const STORE = "ezzycraft-pack-blocks";
+let seq = 10;
+const uid = (p) => p + (++seq);
+let cat = "events";
+let insert = { parent: null, after: null };
+let target = { kind: "hook", itemId: "item1", hookId: "hook1" };
+let drag = null;
+let didDrag = false;
+let history = [];
+let model = {
+  services: [{ id: "svc1", name: "playPickup", body: [{ id: "s1", kind: "playSound", sound: "pickup" }] }],
+  items: [{ id: "item1", key: "magicSword", hooks: [{ id: "hook1", name: "onUse", body: [
+    { id: "s2", kind: "callService", name: "playPickup" },
+    { id: "s3", kind: "velocity", x: "0", y: "0.8", z: "0" }
+  ] }] }],
+  features: [{ id: "feat1", name: "chatListener", event: "onChat", body: [
+    { id: "s4", kind: "if", source: "message", op: "===", right: "hello", then: [
+      { id: "s5", kind: "playSound", sound: "pickup" }
+    ] }
+  ] }]
+};
+
+function isC(stmt) { return stmt && (stmt.kind === "if" || stmt.kind === "rayIf" || stmt.kind === "repeat"); }
+function actionColor(kind) { return (ACTIONS.find((a) => a[0] === kind) || [,,, "#4c97ff"])[3]; }
+function actionLabel(kind) { return (ACTIONS.find((a) => a[0] === kind) || [, kind])[1]; }
+function hookLabel(name) { return (HOOKS.find((h) => h[0] === name) || [, name])[1]; }
+function clone(value) { return JSON.parse(JSON.stringify(value)); }
+
+function fresh(kind) {
+  const id = uid("s");
+  if (kind === "playSound") return { id, kind, sound: "pickup" };
+  if (kind === "particle") return { id, kind, particle: "smoke", at: "player", x: "0", y: "0", z: "0" };
+  if (kind === "heal" || kind === "damage") return { id, kind, amount: "2" };
+  if (kind === "velocity") return { id, kind, x: "0", y: "0.8", z: "0" };
+  if (kind === "giveItem") return { id, kind, itemId: "120", count: "1" };
+  if (kind === "setBlock") return { id, kind, x: "0", y: "0", z: "0", blockId: "1" };
+  if (kind === "spawnDrop") return { id, kind, itemId: "120", count: "1", x: "0", y: "0", z: "0" };
+  if (kind === "setTime") return { id, kind, hours: "12" };
+  if (kind === "launch") return { id, kind, speed: "18", lifetime: "4", damage: "3" };
+  if (kind === "callService") return { id, kind, name: (model.services[0] && model.services[0].name) || "playPickup" };
+  if (kind === "returnHit") return { id, kind, damage: "1.5", knockback: "1.2" };
+  if (kind === "rayIf") return { id, kind, target: "player", maxDistance: "12", then: [] };
+  if (kind === "repeat") return { id, kind, times: "3", then: [] };
+  return { id, kind: "if", source: "message", op: "===", right: "hello", then: [] };
+}
+
+function eachScript(fn) {
+  model.services.forEach((s) => fn(s.body, { kind: "service", id: s.id }));
+  model.features.forEach((f) => fn(f.body, { kind: "feature", id: f.id }));
+  model.items.forEach((item) => item.hooks.forEach((h) => fn(h.body, { kind: "hook", itemId: item.id, hookId: h.id })));
+}
+function scriptBody(script) {
+  if (script.kind === "service") return (model.services.find((s) => s.id === script.id) || {}).body;
+  if (script.kind === "feature") return (model.features.find((f) => f.id === script.id) || {}).body;
+  const item = model.items.find((i) => i.id === script.itemId);
+  return item && (item.hooks.find((h) => h.id === script.hookId) || {}).body;
+}
+function sameScript(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === "hook") return a.itemId === b.itemId && a.hookId === b.hookId;
+  return a.id === b.id;
+}
+function findInBody(body, id) {
+  if (!body) return null;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i].id === id) return { body, index: i, stmt: body[i] };
+    if (isC(body[i])) {
+      const nested = findInBody(body[i].then, id);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+function locate(id) {
+  let found = null;
+  eachScript((body, script) => {
+    if (found) return;
+    const hit = findInBody(body, id);
+    if (hit) found = { ...hit, script };
+  });
+  return found;
+}
+function containsId(stmt, id) {
+  if (!stmt) return false;
+  if (stmt.id === id) return true;
+  return (stmt.then || []).some((child) => containsId(child, id));
+}
+function walkBody(body, id, fn) {
+  const next = [];
+  for (const stmt of body) {
+    if (stmt.id === id) { const r = fn(stmt); if (r) next.push(r); continue; }
+    next.push(isC(stmt) ? { ...stmt, then: walkBody(stmt.then, id, fn) } : stmt);
+  }
+  return next;
+}
+function updateStmt(id, fn) {
+  const walk = (body) => walkBody(body, id, fn);
+  model.services = model.services.map((s) => ({ ...s, body: walk(s.body) }));
+  model.features = model.features.map((f) => ({ ...f, body: walk(f.body) }));
+  model.items = model.items.map((item) => ({ ...item, hooks: item.hooks.map((h) => ({ ...h, body: walk(h.body) })) }));
+}
+function takeStmt(id) {
+  let taken = null;
+  updateStmt(id, (stmt) => { taken = stmt; return null; });
+  return taken;
+}
+function insertStmt(dest, stmt) {
+  const body = scriptBody(dest.script);
+  if (!body) return;
+  if (dest.place === "start") { body.unshift(stmt); return; }
+  if (dest.place === "end") { body.push(stmt); return; }
+  const loc = findInBody(body, dest.id);
+  if (!loc) { body.push(stmt); return; }
+  if (dest.place === "after") loc.body.splice(loc.index + 1, 0, stmt);
+  else if (dest.place === "into" && isC(loc.stmt)) loc.stmt.then.push(stmt);
+}
+function wouldNestInSelf(stmt, dest) {
+  if (!isC(stmt)) return false;
+  if (dest.place === "into" && (dest.id === stmt.id || containsId(stmt, dest.id))) return true;
+  if ((dest.place === "after" || dest.place === "start") && dest.id && containsId(stmt, dest.id)) return true;
+  return false;
+}
+
+function ident(raw, fallback) {
+  const cleaned = String(raw || "").trim().replace(/[^\w$]/g, "");
+  return cleaned && /^[A-Za-z_$]/.test(cleaned) ? cleaned : fallback;
+}
+function num(raw) { const n = Number(raw); return Number.isFinite(n) ? String(n) : "0"; }
+function playerPos(axis) {
+  return "(event.player && event.player.position ? event.player.position." + axis + " : 0)";
+}
+function cmpLeft(source) {
+  if (source === "message") return "(event.message || '')";
+  if (source === "sender") return "(event.sender || '')";
+  if (source === "eventType") return "(event.type || '')";
+  if (source === "time") return "(event.world && event.world.time != null ? event.world.time : api.world.time)";
+  if (source === "health") return "(event.player && event.player.health != null ? event.player.health : 0)";
+  if (source === "px") return playerPos("x");
+  if (source === "py") return playerPos("y");
+  if (source === "pz") return playerPos("z");
+  return "(event.dt || 0)";
+}
+function posArgs(stmt) {
+  if (stmt.at === "hit") {
+    return [
+      "(event.position ? event.position.x : " + playerPos("x") + ")",
+      "(event.position ? event.position.y : " + playerPos("y") + ")",
+      "(event.position ? event.position.z : " + playerPos("z") + ")"
+    ];
+  }
+  if (stmt.at === "xyz") return [num(stmt.x), num(stmt.y), num(stmt.z)];
+  return [playerPos("x"), playerPos("y"), playerPos("z")];
+}
+function emitStmt(stmt, indent) {
+  const n = indent;
+  if (stmt.kind === "playSound") return n + "api.effects.playSound(" + JSON.stringify(stmt.sound) + ");\n";
+  if (stmt.kind === "particle") {
+    const p = posArgs(stmt);
+    return n + "api.effects.particle(" + JSON.stringify(stmt.particle) + ", " + p[0] + ", " + p[1] + ", " + p[2] + ");\n";
+  }
+  if (stmt.kind === "heal") return n + "api.player.heal(" + num(stmt.amount) + ");\n";
+  if (stmt.kind === "damage") return n + "api.player.damage(" + num(stmt.amount) + ");\n";
+  if (stmt.kind === "velocity") return n + "api.player.addVelocity(" + num(stmt.x) + ", " + num(stmt.y) + ", " + num(stmt.z) + ");\n";
+  if (stmt.kind === "giveItem") return n + "api.inventory.giveItem(" + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
+  if (stmt.kind === "setBlock") return n + "api.world.setBlock(" + num(stmt.x) + ", " + num(stmt.y) + ", " + num(stmt.z) + ", " + num(stmt.blockId) + ");\n";
+  if (stmt.kind === "spawnDrop") return n + "api.world.spawnDrop(" + num(stmt.x) + ", " + num(stmt.y) + ", " + num(stmt.z) + ", " + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
+  if (stmt.kind === "setTime") return n + "api.world.setTime(" + num(stmt.hours) + ");\n";
+  if (stmt.kind === "launch") return n + "api.projectiles.launch({ speed: " + num(stmt.speed) + ", lifetime: " + num(stmt.lifetime) + ", damage: " + num(stmt.damage) + " });\n";
+  if (stmt.kind === "callService") return n + "api.services." + ident(stmt.name, "playPickup") + "();\n";
+  if (stmt.kind === "returnHit") return n + "return api.combat.modifyHit(" + num(stmt.damage) + ", " + num(stmt.knockback) + ");\n";
+  if (isC(stmt)) {
+    let head = "";
+    if (stmt.kind === "repeat") head = "for (let _r" + stmt.id + " = 0; _r" + stmt.id + " < " + num(stmt.times) + "; _r" + stmt.id + "++)";
+    else if (stmt.kind === "rayIf") {
+      const typ = stmt.target === "block" ? "block" : "player";
+      head = "if (((game.services.rayTrace(" + num(stmt.maxDistance) + ", 1)[0] || {}).type === " + JSON.stringify(typ) + "))";
+    } else {
+      const right = (stmt.source === "message" || stmt.source === "sender" || stmt.source === "eventType")
+        ? JSON.stringify(stmt.right) : num(stmt.right);
+      head = "if (" + cmpLeft(stmt.source) + " " + stmt.op + " " + right + ")";
+    }
+    return n + head + " {\n" + (stmt.then || []).map((c) => emitStmt(c, indent + "  ")).join("") + n + "}\n";
+  }
+  return "";
+}
+function generate() {
+  const services = model.services.map((s) =>
+    "    " + ident(s.name, "service") + "(game, api, event) {\n" +
+    s.body.map((b) => emitStmt(b, "      ")).join("") + "    }").join(",\n");
+  const items = model.items.map((item) =>
+    "    " + ident(item.key, "item") + ": {\n" +
+    item.hooks.map((h) => "      " + h.name + "(game, api, event) {\n" +
+      h.body.map((b) => emitStmt(b, "        ")).join("") + "      }").join(",\n") +
+    "\n    }").join(",\n");
+  const features = model.features.map((f) =>
+    "    // " + (f.event || "onChat") + "\n    " + ident(f.name, "feature") + "(game, api, event) {\n" +
+    f.body.map((b) => emitStmt(b, "      ")).join("") + "    }").join(",\n");
+  return "({\n  services: {\n" + services + "\n  },\n  items: {\n" + items + "\n  },\n  features: {\n" + features + "\n  }\n})";
+}
+
+function snapshot() {
+  history.push(JSON.stringify(model));
+  if (history.length > 40) history.shift();
+}
+function persist() {
+  try { localStorage.setItem(STORE, JSON.stringify({ seq, model })); } catch (e) {}
+}
+function restore() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+    if (saved && saved.model) { model = saved.model; seq = saved.seq || seq; }
+  } catch (e) {}
+  if (model.features) model.features.forEach((f) => { if (!f.event) f.event = "onChat"; });
+  JSON.stringify(model, (key, value) => {
+    if (key === "id") {
+      const m = String(value).match(/(\d+)$/);
+      if (m) seq = Math.max(seq, Number(m[1]));
+    }
+    return value;
+  });
+}
+function pickDefaultTarget() {
+  if (target.kind === "service" && model.services.some((s) => s.id === target.id)) return;
+  if (target.kind === "feature" && model.features.some((f) => f.id === target.id)) return;
+  if (target.kind === "hook") {
+    const item = model.items.find((i) => i.id === target.itemId);
+    if (item && item.hooks.some((h) => h.id === target.hookId)) return;
+  }
+  if (model.items[0] && model.items[0].hooks[0]) {
+    target = { kind: "hook", itemId: model.items[0].id, hookId: model.items[0].hooks[0].id };
+  } else if (model.services[0]) target = { kind: "service", id: model.services[0].id };
+  else if (model.features[0]) target = { kind: "feature", id: model.features[0].id };
+  insert = { parent: null, after: null };
+}
+function note(text) { document.getElementById("notice").textContent = text; }
+function selectScript(script, extra) {
+  target = script;
+  insert = extra || { parent: null, after: null };
+}
+
+function el(tag, attrs, kids) {
+  const node = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => {
+    if (k === "style") node.setAttribute("style", v);
+    else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else if (v === true) node.setAttribute(k, "");
+    else if (v != null && v !== false) node.setAttribute(k, v);
+  });
+  (kids || []).forEach((kid) => node.append(kid && kid.nodeType ? kid : document.createTextNode(kid == null ? "" : String(kid))));
+  return node;
+}
+function bubble(value, onChange, wide) {
+  return el("input", { class: wide ? "wide" : "", value, onclick: (e) => e.stopPropagation(), oninput: (e) => onChange(e.target.value) });
+}
+function menu(value, options, onChange) {
+  const select = el("select", { onclick: (e) => e.stopPropagation(), onchange: (e) => onChange(e.target.value) });
+  options.forEach((option) => {
+    const id = Array.isArray(option) ? option[0] : option;
+    const text = Array.isArray(option) ? option[1] : option;
+    const opt = el("option", { value: id }, [text]);
+    if (String(id) === String(value)) opt.selected = true;
+    select.append(opt);
+  });
+  return select;
+}
+function xbtn(onClick) {
+  return el("button", { class: "sb-x", type: "button", "aria-label": "Remove", onclick: (e) => { e.stopPropagation(); snapshot(); onClick(); render(); } }, ["×"]);
+}
+
+function clearDrops() {
+  document.querySelectorAll(".drop-on").forEach((n) => n.classList.remove("drop-on"));
+}
+function markDrop(node, dest) {
+  node.dataset.place = dest.place || "";
+  if (dest.script) {
+    node.dataset.scriptKind = dest.script.kind;
+    node.dataset.scriptId = dest.script.kind === "hook" ? dest.script.itemId + ":" + dest.script.hookId : dest.script.id;
+  }
+  if (dest.id) node.dataset.id = dest.id;
+  return node;
+}
+function destFromNode(node) {
+  if (!node || !node.dataset || !node.dataset.place) return null;
+  const dest = { place: node.dataset.place };
+  if (node.dataset.scriptKind === "hook") {
+    const parts = (node.dataset.scriptId || "").split(":");
+    dest.script = { kind: "hook", itemId: parts[0], hookId: parts[1] };
+  } else if (node.dataset.scriptKind) dest.script = { kind: node.dataset.scriptKind, id: node.dataset.scriptId };
+  if (node.dataset.id) dest.id = node.dataset.id;
+  return dest;
+}
+function destAt(x, y) {
+  const elAt = document.elementFromPoint(x, y);
+  const node = elAt && elAt.closest("[data-place]");
+  return destFromNode(node);
+}
+function canDropOn(dest) {
+  if (!drag || !dest) return false;
+  if (dest.place === "trash") return drag.type === "stmt";
+  if (drag.type === "hat") return dest.place === "workspace" || !!dest.script;
+  return dest.place !== "workspace" && dest.place !== "trash" && !!dest.script;
+}
+function highlightAt(x, y) {
+  clearDrops();
+  const elAt = document.elementFromPoint(x, y);
+  const node = elAt && elAt.closest("[data-place]");
+  if (node && canDropOn(destFromNode(node))) node.classList.add("drop-on");
+}
+function finishDrop(x, y) {
+  const dest = destAt(x, y);
+  if (!dest || !canDropOn(dest)) return;
+  if (dest.place === "trash") { dropTrash(); return; }
+  if (drag.type === "hat") { dropHat(drag, dest.script); return; }
+  applyDrop(dest);
+}
+function bindDrag(node, payload) {
+  node.addEventListener("pointerdown", (e) => {
+    if (e.button && e.button !== 0) return;
+    if (e.target.closest("input, select, button")) return;
+    const origin = node;
+    drag = Object.assign({ moved: false, startX: e.clientX, startY: e.clientY, ghost: null, origin }, payload);
+    didDrag = false;
+    const onMove = (ev) => {
+      if (!drag) return;
+      if (!drag.moved && Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY) < 6) return;
+      ev.preventDefault();
+      if (!drag.moved) {
+        drag.moved = true;
+        didDrag = true;
+        document.body.classList.add("is-dragging");
+        origin.classList.add("dragging");
+        const ghost = origin.cloneNode(true);
+        ghost.classList.add("ghost");
+        ghost.querySelectorAll("input, select, button").forEach((child) => child.setAttribute("tabindex", "-1"));
+        document.body.append(ghost);
+        drag.ghost = ghost;
+      }
+      drag.ghost.style.left = (ev.clientX - 18) + "px";
+      drag.ghost.style.top = (ev.clientY - 12) + "px";
+      highlightAt(ev.clientX, ev.clientY);
+    };
+    const onUp = (ev) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const moved = drag && drag.moved;
+      const x = ev.clientX, y = ev.clientY;
+      if (drag && drag.ghost) drag.ghost.remove();
+      origin.classList.remove("dragging");
+      document.body.classList.remove("is-dragging");
+      clearDrops();
+      if (moved) finishDrop(x, y);
+      drag = null;
+      setTimeout(() => { didDrag = false; }, 0);
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+  });
+  return node;
+}
+function bindDrop(node, dest) {
+  return markDrop(node, dest);
+}
+function slot(dest) {
+  return bindDrop(el("div", { class: "drop-slot" }), dest);
+}
+
+function applyDrop(dest) {
+  if (!drag || !dest || !dest.script || !scriptBody(dest.script)) return;
+  if (drag.type === "palette") {
+    snapshot();
+    const stmt = fresh(drag.kind);
+    insertStmt(dest, stmt);
+    selectScript(dest.script, isC(stmt) ? { parent: stmt.id, after: null } : { parent: dest.place === "into" ? dest.id : null, after: stmt.id });
+    note("Snapped “" + actionLabel(drag.kind) + "” " + (dest.place === "start" ? "under the hat." : dest.place === "into" ? "inside the block." : "onto the stack."));
+    document.body.dataset.panel = "stacks";
+    render();
+    return;
+  }
+  if (drag.type !== "stmt") return;
+  if (dest.place === "after" && drag.id === dest.id) return;
+  const found = locate(drag.id);
+  if (!found) return;
+  if (wouldNestInSelf(found.stmt, dest)) { note("That block cannot go inside itself."); return; }
+  snapshot();
+  const stmt = takeStmt(drag.id);
+  if (!stmt) return;
+  insertStmt(dest, stmt);
+  selectScript(dest.script, { parent: dest.place === "into" ? dest.id : null, after: stmt.id });
+  note("Moved block onto the stack.");
+  render();
+}
+function dropTrash() {
+  if (!drag) return;
+  if (drag.type === "stmt") {
+    snapshot();
+    takeStmt(drag.id);
+    note("Deleted block.");
+    render();
+  } else note("Palette blocks are not deleted. Drag a stacked block here.");
+}
+function dropHat(payload, onto) {
+  if (payload.hat === "service") addService();
+  else if (payload.hat === "feature") addFeature(payload.event);
+  else if (payload.hat === "item") addItem();
+  else if (payload.hat === "hook") {
+    if (onto && onto.kind === "hook") target = onto;
+    addHook(payload.hook);
+  }
+}
+
+function clickAdd(kind) {
+  if (didDrag) return;
+  if (!scriptBody(target)) { note("Drop an event hat onto the board first."); return; }
+  snapshot();
+  const stmt = fresh(kind);
+  const dest = clickDest();
+  insertStmt(dest, stmt);
+  selectScript(dest.script, isC(stmt) ? { parent: stmt.id, after: null } : { parent: dest.place === "into" ? dest.id : insert.parent, after: stmt.id });
+  note("Snapped “" + actionLabel(kind) + "” onto " + label() + ".");
+  document.body.dataset.panel = "stacks";
+  render();
+}
+function clickDest() {
+  if (insert.parent) return { script: target, place: "into", id: insert.parent };
+  if (insert.after) return { script: target, place: "after", id: insert.after };
+  return { script: target, place: "end" };
+}
+
+function setFields(id, patch) {
+  updateStmt(id, (cur) => ({ ...cur, ...patch }));
+  codeOnly();
+  persist();
+}
+function paintFields(stmt, row) {
+  if (stmt.kind === "playSound") row.append("play sound", menu(stmt.sound, SOUNDS, (sound) => setFields(stmt.id, { sound })));
+  if (stmt.kind === "particle") {
+    row.append("particle", menu(stmt.particle, PARTICLES, (particle) => setFields(stmt.id, { particle })),
+      "at", menu(stmt.at || "player", [["player", "player"], ["hit", "hit"], ["xyz", "x y z"]], (at) => { setFields(stmt.id, { at }); render(); }));
+    if (stmt.at === "xyz") row.append(bubble(stmt.x, (x) => setFields(stmt.id, { x })), bubble(stmt.y, (y) => setFields(stmt.id, { y })), bubble(stmt.z, (z) => setFields(stmt.id, { z })));
+  }
+  if (stmt.kind === "heal") row.append("heal", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
+  if (stmt.kind === "damage") row.append("damage", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
+  if (stmt.kind === "velocity") row.append("push x", bubble(stmt.x, (x) => setFields(stmt.id, { x })), "y", bubble(stmt.y, (y) => setFields(stmt.id, { y })), "z", bubble(stmt.z, (z) => setFields(stmt.id, { z })));
+  if (stmt.kind === "giveItem") row.append("give id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })));
+  if (stmt.kind === "setBlock") row.append("set block", bubble(stmt.blockId, (blockId) => setFields(stmt.id, { blockId })), "at", bubble(stmt.x, (x) => setFields(stmt.id, { x })), bubble(stmt.y, (y) => setFields(stmt.id, { y })), bubble(stmt.z, (z) => setFields(stmt.id, { z })));
+  if (stmt.kind === "spawnDrop") row.append("drop id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })), "at", bubble(stmt.x, (x) => setFields(stmt.id, { x })), bubble(stmt.y, (y) => setFields(stmt.id, { y })), bubble(stmt.z, (z) => setFields(stmt.id, { z })));
+  if (stmt.kind === "setTime") row.append("set time to", bubble(stmt.hours, (hours) => setFields(stmt.id, { hours })), "hours");
+  if (stmt.kind === "launch") row.append("launch speed", bubble(stmt.speed, (speed) => setFields(stmt.id, { speed })), "life", bubble(stmt.lifetime, (lifetime) => setFields(stmt.id, { lifetime })), "dmg", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })));
+  if (stmt.kind === "callService") {
+    const names = model.services.map((s) => s.name);
+    if (stmt.name && !names.includes(stmt.name)) names.unshift(stmt.name);
+    row.append("call", names.length ? menu(stmt.name, names, (name) => setFields(stmt.id, { name })) : bubble(stmt.name, (name) => setFields(stmt.id, { name }), true));
+  }
+  if (stmt.kind === "returnHit") row.append("hit damage ×", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })), "knockback ×", bubble(stmt.knockback, (knockback) => setFields(stmt.id, { knockback })));
+}
+function stmtNode(stmt, script) {
+  const color = actionColor(stmt.kind);
+  const after = { script, place: "after", id: stmt.id };
+  if (isC(stmt)) {
+    const row = bindDrag(el("div", { class: "sb sb-c", style: "--sb:" + color, onclick: (e) => {
+      e.stopPropagation();
+      if (didDrag) return;
+      selectScript(script, { parent: stmt.id, after: null });
+      note("Next blocks go inside this " + (stmt.kind === "repeat" ? "repeat" : "if") + ". You can also drop onto it.");
+      render();
+    } }), { type: "stmt", id: stmt.id });
+    bindDrop(row, after);
+    const head = el("div", { class: "sb-head" });
+    if (stmt.kind === "if") {
+      head.append("if", menu(stmt.source, CMP, (source) => { setFields(stmt.id, { source, right: source === "eventType" ? "chat" : stmt.right }); render(); }),
+        menu(stmt.op, OPS, (op) => setFields(stmt.id, { op })),
+        stmt.source === "eventType"
+          ? menu(stmt.right, EVENT_TYPES, (right) => setFields(stmt.id, { right }))
+          : bubble(stmt.right, (right) => setFields(stmt.id, { right })), "then");
+    } else if (stmt.kind === "rayIf") {
+      head.append("if looking at", menu(stmt.target, [["player", "player"], ["block", "block"]], (targetType) => setFields(stmt.id, { target: targetType })),
+        "within", bubble(stmt.maxDistance, (maxDistance) => setFields(stmt.id, { maxDistance })), "blocks");
+    } else head.append("repeat", bubble(stmt.times, (times) => setFields(stmt.id, { times })), "times");
+    if (insert.parent === stmt.id) head.append(el("span", { class: "pill" }, ["next blocks go here"]));
+    head.append(xbtn(() => { takeStmt(stmt.id); }));
+    row.append(head);
+    const mouth = bindDrop(el("div", { class: "sb-mouth" }), { script, place: "into", id: stmt.id });
+    if (!stmt.then.length) mouth.append(el("p", { class: "empty" }, ["drop blocks here"]));
+    else {
+      mouth.append(slot({ script, place: "into", id: stmt.id }));
+      stmt.then.forEach((child) => {
+        mouth.append(stmtNode(child, script));
+        mouth.append(slot({ script, place: "after", id: child.id }));
+      });
+    }
+    row.append(mouth);
+    return row;
+  }
+  const row = bindDrag(el("div", { class: "sb", style: "--sb:" + color, onclick: (e) => {
+    e.stopPropagation();
+    if (didDrag) return;
+    selectScript(script, { parent: null, after: stmt.id });
+    note("Next blocks snap onto the back of this one.");
+    render();
+  } }), { type: "stmt", id: stmt.id });
+  bindDrop(row, after);
+  paintFields(stmt, row);
+  row.append(xbtn(() => { takeStmt(stmt.id); }));
+  return row;
+}
+function hat(color, kids, script, onClick) {
+  const row = bindDrop(el("div", { class: "sb sb-hat", style: "--sb:" + color, onclick: (e) => {
+    if (didDrag) return;
+    e.stopPropagation();
+    onClick();
+  } }), { script, place: "start" });
+  kids.forEach((kid) => row.append(kid));
+  return row;
+}
+function scriptBox(on, hatNode, body, script) {
+  const box = bindDrop(el("div", { class: "script" + (on ? " on" : ""), onclick: () => {
+    if (didDrag) return;
+    selectScript(script, { parent: null, after: null });
+    note("Selected " + label() + ". Drop blocks under the hat or onto the stack.");
+    render();
+  } }), { script, place: "end" });
+  box.append(hatNode);
+  box.append(slot({ script, place: "start" }));
+  body.forEach((stmt) => {
+    box.append(stmtNode(stmt, script));
+    box.append(slot({ script, place: "after", id: stmt.id }));
+  });
+  return box;
+}
+
+function label() {
+  if (target.kind === "service") return (model.services.find((s) => s.id === target.id) || {}).name || "service";
+  if (target.kind === "feature") return (model.features.find((f) => f.id === target.id) || {}).name || "feature";
+  const item = model.items.find((i) => i.id === target.itemId);
+  const hook = item && item.hooks.find((h) => h.id === target.hookId);
+  return (item ? item.key : "item") + " · " + hookLabel(hook && hook.name).toLowerCase();
+}
+function paletteHat(color, text, payload, onClick) {
+  const node = bindDrag(el("div", { class: "sb sb-hat", style: "--sb:" + color, role: "button", onclick: () => { if (!didDrag) onClick(); } }, [text]), payload);
+  return node;
+}
+function paletteStack(action) {
+  return bindDrag(el("div", { class: "sb", style: "--sb:" + action[3], role: "button", onclick: () => clickAdd(action[0]) }, [action[1]]), { type: "palette", kind: action[0] });
+}
+
+function render() {
+  pickDefaultTarget();
+  if (insert.parent && !locate(insert.parent)) insert = { parent: null, after: null };
+  if (insert.after && !locate(insert.after)) insert = { parent: null, after: null };
+  document.body.dataset.panel = document.body.dataset.panel || "stacks";
+  const cats = document.getElementById("cats");
+  cats.replaceChildren(...CATS.map(([id, labelText, color]) => el("button", {
+    class: "sb-cat" + (cat === id ? " on" : ""), style: "background:" + color,
+    onclick: () => { cat = id; document.body.dataset.panel = "palette"; document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.panel === "palette")); render(); }
+  }, [labelText])));
+  const fly = document.getElementById("fly");
+  const bits = [el("p", { class: "hint" }, ["Drag onto " + label() + (insert.parent ? " · inside block" : insert.after ? " · after block" : "")])];
+  if (cat === "events") {
+    bits.push(paletteHat("#ffbf00", "when item clicked", { type: "hat", hat: "item" }, addItem));
+    HOOKS.forEach(([id, labelText]) => bits.push(paletteHat("#ffbf00", "when " + labelText.toLowerCase(), { type: "hat", hat: "hook", hook: id }, () => addHook(id))));
+    bits.push(paletteHat("#ff6680", "define my block", { type: "hat", hat: "service" }, addService));
+    FEATURE_EVENTS.forEach(([id, labelText]) => bits.push(paletteHat("#0fbd8c", "when " + labelText, { type: "hat", hat: "feature", event: id }, () => addFeature(id))));
+  }
+  ACTIONS.filter((a) => a[2] === cat).forEach((a) => bits.push(paletteStack(a)));
+  fly.replaceChildren(...bits);
+  const scripts = [];
+  model.services.forEach((service) => {
+    const script = { kind: "service", id: service.id };
+    const on = sameScript(target, script);
+    scripts.push(scriptBox(on, hat("#ff6680", ["define ", bubble(service.name, (name) => { service.name = name; codeOnly(); persist(); }, true), xbtn(() => { model.services = model.services.filter((s) => s.id !== service.id); })], script, () => { selectScript(script); note("My Block selected. Drop blocks under this hat."); render(); }), service.body, script));
+  });
+  model.items.forEach((item) => item.hooks.forEach((hook) => {
+    const script = { kind: "hook", itemId: item.id, hookId: hook.id };
+    const on = sameScript(target, script);
+    scripts.push(scriptBox(on, hat("#ffbf00", ["when ", bubble(item.key, (key) => { item.key = key; codeOnly(); persist(); }, true), " " + hookLabel(hook.name).toLowerCase(), xbtn(() => {
+      item.hooks = item.hooks.filter((h) => h.id !== hook.id);
+      model.items = model.items.filter((entry) => entry.hooks.length);
+    })], script, () => { selectScript(script); note("Hat selected. Drop blocks onto it or onto the stack."); render(); }), hook.body, script));
+  }));
+  model.features.forEach((feature) => {
+    const script = { kind: "feature", id: feature.id };
+    const on = sameScript(target, script);
+    scripts.push(scriptBox(on, hat("#0fbd8c", ["when ", bubble(feature.name, (name) => { feature.name = name; codeOnly(); persist(); }, true), menu(feature.event || "onChat", FEATURE_EVENTS, (event) => { feature.event = event; codeOnly(); persist(); }), xbtn(() => { model.features = model.features.filter((f) => f.id !== feature.id); })], script, () => { selectScript(script); note("Feature selected. Drop blocks under this hat."); render(); }), feature.body, script));
+  });
+  document.getElementById("scripts").replaceChildren(...scripts);
+  codeOnly();
+  persist();
+}
+function codeOnly() { document.getElementById("code").textContent = generate(); persist(); }
+
+function addService() {
+  snapshot();
+  const id = uid("svc");
+  model.services.push({ id, name: "newService", body: [] });
+  selectScript({ kind: "service", id });
+  note("New My Block. Type its name on the hat, then drop stack blocks under it.");
+  document.body.dataset.panel = "stacks";
+  render();
+}
+function addItem() {
+  snapshot();
+  const id = uid("item");
+  const hookId = uid("hook");
+  model.items.push({ id, key: "newItem", hooks: [{ id: hookId, name: "onUse", body: [] }] });
+  selectScript({ kind: "hook", itemId: id, hookId });
+  note("New item script. The hat name must match Sprite Studio.");
+  document.body.dataset.panel = "stacks";
+  render();
+}
+function addFeature(event) {
+  snapshot();
+  const id = uid("feat");
+  const chosen = event || "onChat";
+  const names = { onChat: "chatListener", onTick: "tickHandler", onPlayerJoin: "joinHandler", onPlayerLeave: "leaveHandler" };
+  model.features.push({ id, name: names[chosen] || "newFeature", event: chosen, body: [] });
+  selectScript({ kind: "feature", id });
+  note("New feature: " + (FEATURE_EVENTS.find((f) => f[0] === chosen) || [, chosen])[1] + ". Drop blocks under the hat.");
+  document.body.dataset.panel = "stacks";
+  render();
+}
+function addHook(name) {
+  const itemId = target.kind === "hook" ? target.itemId : (model.items[0] && model.items[0].id);
+  if (!itemId) { note("Add an item script first, or drop “when item clicked” onto the board."); return; }
+  const item = model.items.find((entry) => entry.id === itemId);
+  const existing = item.hooks.find((hook) => hook.name === name);
+  if (existing) {
+    selectScript({ kind: "hook", itemId, hookId: existing.id });
+    note("That hat is already on the item.");
+    document.body.dataset.panel = "stacks";
+    render();
+    return;
+  }
+  snapshot();
+  const hookId = uid("hook");
+  item.hooks.push({ id: hookId, name, body: [] });
+  selectScript({ kind: "hook", itemId, hookId });
+  note("Hat added. Drop blocks onto it or onto the back of another block.");
+  document.body.dataset.panel = "stacks";
+  render();
+}
+
+bindDrop(document.getElementById("board"), { place: "workspace" });
+bindDrop(document.getElementById("trash"), { place: "trash" });
+document.querySelectorAll(".tabs button").forEach((button) => button.addEventListener("click", () => {
+  document.body.dataset.panel = button.dataset.panel;
+  document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b === button));
+}));
+document.getElementById("undo").addEventListener("click", () => {
+  const prev = history.pop();
+  if (!prev) { note("Nothing to undo."); return; }
+  model = JSON.parse(prev);
+  render();
+  note("Undid last change.");
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    document.getElementById("undo").click();
+  }
+});
+document.getElementById("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(generate()); note("Copied. Paste it into the pack-wide JavaScript module."); }
+  catch { note("Copy was blocked. Use Download JS instead."); }
+});
+document.getElementById("save").addEventListener("click", () => {
+  const blob = new Blob([generate() + "\n"], { type: "text/javascript" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "pack-module.js"; a.click();
+  URL.revokeObjectURL(url);
+  note("Downloaded pack-module.js. Paste that text into Sprite Studio.");
+});
+restore();
+render();
+</script>
+</body>
+</html>
