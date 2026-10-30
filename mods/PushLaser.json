@@ -1,6 +1,6 @@
 {
   "schema": "coop1.10.item-block-pack.v2",
-  "id": "coop_item_pack",
+  "id": "PushLaser",
   "name": "Co-op item pack",
   "entries": [
     {
@@ -316,6 +316,6 @@
   ],
   "javascript": {
     "runtime": "coop1.10.pack-javascript.v1",
-    "source": "({\n  services: {\n\n  },\n  items: {\n    newItem: {\n      onUse(game, api, event) {\n        const player = event.player;\n        const players = event.players || [];\n        const world = event.world;\n        const block = event.target && event.target.type === \"block\"\n          ? event.target\n          : event.hit && event.hit.type === \"block\"\n            ? event.hit\n            : (event.position && (event.type === \"block\" || event.type === \"block-use\")\n              ? { id: event.id, type: \"block\", position: event.position, face: event.face }\n              : null);\n        if (((game.services.rayTrace(12, 1)[0] || {}).type === \"player\")) {\n          if (player) api.player.addVelocity(5, 5, 3);\n        }\n      }\n    }\n  },\n  features: {\n\n  }\n})"
+    "source": "({\n  services: {\n\n  },\n  items: {\n    PushLaser: {\n      onUse(game, api, event) {\n        const player = event.player;\n        const players = event.players || [];\n        const world = event.world;\n        const block = event.target && event.target.type === \"block\"\n          ? event.target\n          : event.hit && event.hit.type === \"block\"\n            ? event.hit\n            : (event.position && (event.type === \"block\" || event.type === \"block-use\")\n              ? { id: event.id, type: \"block\", position: event.position, face: event.face }\n              : null);\n        if (((game.services.rayTrace(12, 1)[0] || {}).type === \"player\")) {\n          if (player) api.player.addVelocity(5, 5, 3);\n        }\n      }\n    }\n  },\n  features: {\n\n  }\n})"
   }
 }
