@@ -126,6 +126,23 @@
   .sb.drop-on { filter: brightness(1.08); }
   .sb.dragging { opacity: .4; pointer-events: none; }
   .ghost { position: fixed; pointer-events: none; z-index: 80; opacity: .92; margin: 0; max-width: 380px; box-shadow: 0 10px 22px rgba(0,0,0,.28); }
+  .script.off-stack { filter: grayscale(1); opacity: .72; }
+  .script.off-stack::after { content: "not on a stack"; display: block; margin: 4px 0 0 8px; color: #6d768c; font-size: 11px; font-weight: 700; }
+  .reporter {
+    display: inline-flex; align-items: center; gap: 4px; min-height: 22px; padding: 0 10px;
+    border-radius: 999px; background: #ff8c1a; color: #fff; font-size: 12px; font-weight: 700;
+    cursor: grab; user-select: none; touch-action: none; box-shadow: 0 2px 0 rgba(0,0,0,.18);
+  }
+  .reporter:active { cursor: grabbing; }
+  .reporter.dragging { opacity: .4; pointer-events: none; }
+  .reporter.bad { filter: grayscale(1); opacity: .5; }
+  .socket {
+    display: inline-flex; align-items: center; min-height: 26px; min-width: 36px; padding: 2px;
+    border-radius: 999px; background: rgba(0,0,0,.25); box-shadow: inset 0 1px 0 rgba(0,0,0,.22);
+  }
+  .socket:empty::before { content: ""; width: 22px; height: 16px; margin: 0 4px; border-radius: 999px; background: rgba(255,255,255,.28); }
+  .socket.drop-on { background: #ffd500; outline: 2px solid #ffbf00; }
+  .fly .reporter { margin: 4px 0; align-self: flex-start; }
   @media (max-width: 900px) {
     .tabs { display: flex; }
     .app { grid-template-columns: 1fr; height: calc(100% - 92px); }
@@ -143,7 +160,7 @@
   <div class="mark">B</div>
   <div class="grow">
     <h1>Pack Blocks</h1>
-    <p id="notice">Drag stacks anywhere. Drop blocks onto a hat or onto another block to snap them on.</p>
+    <p id="notice">Drag variables into the round slots. Blocks snap to the nearest stack when dropped close by.</p>
   </div>
   <div class="trash" id="trash">Drop to delete</div>
   <button class="flag gray" id="undo" type="button">Undo</button>
@@ -176,9 +193,25 @@ const PARTICLES = ["smoke", "bubble", "water", "lava", "break"];
 const OPS = ["===", "!==", "<", "<=", ">", ">="];
 const CATS = [
   ["events", "Events", "#ffbf00"], ["sound", "Sound", "#cf63cf"], ["motion", "Motion", "#4c97ff"],
-  ["looks", "World", "#9966ff"], ["sensing", "Sensing", "#5cb1d6"],
+  ["looks", "World", "#9966ff"], ["sensing", "Sensing", "#5cb1d6"], ["vars", "Variables", "#ff8c1a"],
   ["control", "Control", "#ffab19"], ["myblocks", "My Blocks", "#ff6680"]
 ];
+const VAR_LIST = [
+  ["player", "player", ["who", "pos", "value"], null, false],
+  ["attackedPlayer", "attacked player", ["who", "pos", "value"], ["onHit", "onProjectileHit"], false],
+  ["clickedBy", "clicked by", ["who", "pos", "value"], ["onBlockUse"], false],
+  ["senderPlayer", "sender", ["who", "pos", "value"], ["onChat"], false],
+  ["joinedPlayer", "joined player", ["who", "value"], ["onPlayerJoin"], false],
+  ["leavingPlayer", "leaving player", ["who", "value"], ["onPlayerLeave"], false],
+  ["block", "block", ["pos", "value"], ["onUse", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"], false],
+  ["hit", "hit", ["pos", "value"], ["onProjectileHit"], false],
+  ["event", "event", ["pos", "value"], null, false],
+  ["world", "world", ["value"], null, false],
+  ["item", "item", ["value"], ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onTick", "onProjectileHit"], true],
+  ["xyz", "x y z", ["pos"], null, false]
+];
+const SNAP_LIMIT = 64;
+const AIM_MODES = [["look", "looking"], ["angles", "yaw / pitch"], ["vector", "x y z"]];
 const ACTIONS = [
   ["playSound", "play sound", "sound", "#cf63cf"],
   ["particle", "particle", "looks", "#9966ff"],
@@ -195,14 +228,6 @@ const ACTIONS = [
   ["repeat", "repeat", "control", "#ffab19"],
   ["returnHit", "hit power", "control", "#ffab19"],
   ["callService", "call", "myblocks", "#ff6680"]
-];
-const PLAYER_ROOTS = [
-  ["player", "player"],
-  ["attackedPlayer", "attacked player"],
-  ["clickedBy", "clicked by"],
-  ["senderPlayer", "sender"],
-  ["joinedPlayer", "joined player"],
-  ["leavingPlayer", "leaving player"]
 ];
 const PLAYER_FIELDS = [
   ["name", "name"], ["id", "id"], ["health", "health"], ["dead", "dead"],
@@ -232,14 +257,6 @@ const ROOTS = {
   world: { expr: "world", fields: [["time", "time"]] },
   item: { expr: "event.item", fields: [["id", "id"], ["name", "name"], ["kind", "kind"]] }
 };
-const CMP_ROOTS = [
-  ...PLAYER_ROOTS,
-  ["block", "block"], ["hit", "hit"], ["event", "event"], ["world", "world"], ["item", "item"]
-];
-const POS_ROOTS = [
-  ...PLAYER_ROOTS,
-  ["block", "block"], ["hit", "hit"], ["event", "event"], ["xyz", "x y z"]
-];
 const STR_FIELDS = { name: 1, id: 1, type: 1, message: 1, sender: 1, kind: 1, gameMode: 1 };
 const STORE = "ezzycraft-pack-blocks";
 let seq = 10;
@@ -277,6 +294,26 @@ function isStrRef(ref) {
   if (ref.field === "id") return /player|Player|clickedBy/.test(ref.root || "");
   return isStrField(ref.field);
 }
+function varSpec(root) { return VAR_LIST.find((entry) => entry[0] === root); }
+function varLabel(root) { return (varSpec(root) || [, root])[1]; }
+function scriptEvent(script) {
+  const rec = scriptRecord(script);
+  if (!rec) return null;
+  if (script.kind === "feature") return rec.event || "onChat";
+  if (script.kind === "hook") return rec.name || "onUse";
+  if (script.kind === "service") return "service";
+  return null;
+}
+function varFits(root, slot, script) {
+  const spec = varSpec(root);
+  if (!spec || spec[2].indexOf(slot) < 0) return false;
+  if (!script || script.kind === "loose") return false;
+  if (spec[4] && script.kind !== "hook") return false;
+  if (!spec[3]) return script.kind === "service" || script.kind === "hook" || script.kind === "feature";
+  if (script.kind === "service") return false;
+  const event = scriptEvent(script);
+  return !!event && spec[3].indexOf(event) >= 0;
+}
 
 function fresh(kind) {
   const id = uid("s");
@@ -288,7 +325,7 @@ function fresh(kind) {
   if (kind === "setBlock") return { id, kind, blockId: "1", pos: { root: "block" } };
   if (kind === "spawnDrop") return { id, kind, itemId: "120", count: "1", pos: { root: "player" } };
   if (kind === "setTime") return { id, kind, hours: "12" };
-  if (kind === "launch") return { id, kind, speed: "18", lifetime: "4", damage: "3" };
+  if (kind === "launch") return { id, kind, speed: "18", lifetime: "4", damage: "3", aim: "look", yaw: "0", pitch: "0", dx: "0", dy: "0", dz: "1" };
   if (kind === "callService") return { id, kind, name: (model.services[0] && model.services[0].name) || "playPickup" };
   if (kind === "returnHit") return { id, kind, damage: "1.5", knockback: "1.2" };
   if (kind === "rayIf") return { id, kind, target: "player", maxDistance: "12", then: [] };
@@ -452,39 +489,58 @@ function refExpr(ref) {
   return "(" + checks.join(" && ") + " ? " + access + " : " + empty + ")";
 }
 function posExpr(pos) {
-  if (!pos || pos.root === "xyz") return [num(pos && pos.x), num(pos && pos.y), num(pos && pos.z)];
+  if (!pos || !pos.root || pos.root === "xyz") return [num(pos && pos.x), num(pos && pos.y), num(pos && pos.z)];
   const root = rootMeta(pos.root).expr;
   return ["x", "y", "z"].map((axis) =>
     "(" + root + " && " + root + ".position ? " + root + ".position." + axis + " : 0)");
 }
-function whoExpr(who) { return rootMeta(who || "player").expr; }
+function whoExpr(who) { return who ? rootMeta(who).expr : "null"; }
+function directionExpr(stmt) {
+  const aim = stmt.aim || "look";
+  if (aim === "vector") return ", direction: { x: " + num(stmt.dx) + ", y: " + num(stmt.dy) + ", z: " + num(stmt.dz) + " }";
+  if (aim === "angles") {
+    const yaw = (Number(stmt.yaw) || 0) * Math.PI / 180;
+    const pitch = (Number(stmt.pitch) || 0) * Math.PI / 180;
+    const round = (n) => String(Math.round(n * 1000) / 1000);
+    return ", direction: { x: " + round(-Math.sin(yaw) * Math.cos(pitch)) +
+      ", y: " + round(Math.sin(pitch)) +
+      ", z: " + round(-Math.cos(yaw) * Math.cos(pitch)) + " }";
+  }
+  return "";
+}
 function emitStmt(stmt, indent) {
   const n = indent;
   if (stmt.kind === "playSound") return n + "api.effects.playSound(" + JSON.stringify(stmt.sound) + ");\n";
   if (stmt.kind === "particle") {
+    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
     const p = posExpr(stmt.pos);
     return n + "api.effects.particle(" + JSON.stringify(stmt.particle) + ", " + p[0] + ", " + p[1] + ", " + p[2] + ");\n";
   }
   if (stmt.kind === "heal" || stmt.kind === "damage") {
     const api = stmt.kind === "heal" ? "heal" : "damage";
+    if (!stmt.who) return n + "/* drop a player variable */\n";
     return n + "if (" + whoExpr(stmt.who) + ") api.player." + api + "(" + num(stmt.amount) + ");\n";
   }
   if (stmt.kind === "velocity") {
+    if (!stmt.who) return n + "/* drop a player variable */\n";
     return n + "if (" + whoExpr(stmt.who) + ") api.player.addVelocity(" + num(stmt.x) + ", " + num(stmt.y) + ", " + num(stmt.z) + ");\n";
   }
   if (stmt.kind === "giveItem") {
+    if (!stmt.who) return n + "/* drop a player variable */\n";
     return n + "if (" + whoExpr(stmt.who) + ") api.inventory.giveItem(" + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
   }
   if (stmt.kind === "setBlock") {
+    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
     const p = posExpr(stmt.pos);
     return n + "api.world.setBlock(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + num(stmt.blockId) + ");\n";
   }
   if (stmt.kind === "spawnDrop") {
+    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
     const p = posExpr(stmt.pos);
     return n + "api.world.spawnDrop(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
   }
   if (stmt.kind === "setTime") return n + "api.world.setTime(" + num(stmt.hours) + ");\n";
-  if (stmt.kind === "launch") return n + "api.projectiles.launch({ speed: " + num(stmt.speed) + ", lifetime: " + num(stmt.lifetime) + ", damage: " + num(stmt.damage) + " });\n";
+  if (stmt.kind === "launch") return n + "api.projectiles.launch({ speed: " + num(stmt.speed) + ", lifetime: " + num(stmt.lifetime) + ", damage: " + num(stmt.damage) + directionExpr(stmt) + " });\n";
   if (stmt.kind === "callService") return n + "api.services." + ident(stmt.name, "playPickup") + "();\n";
   if (stmt.kind === "returnHit") return n + "return api.combat.modifyHit(" + num(stmt.damage) + ", " + num(stmt.knockback) + ");\n";
   if (isC(stmt)) {
@@ -493,7 +549,8 @@ function emitStmt(stmt, indent) {
     else if (stmt.kind === "rayIf") {
       const typ = stmt.target === "block" ? "block" : "player";
       head = "if (((game.services.rayTrace(" + num(stmt.maxDistance) + ", 1)[0] || {}).type === " + JSON.stringify(typ) + "))";
-    } else {
+    } else if (!stmt.cmp || !stmt.cmp.root) head = "if (false)";
+    else {
       const right = isStrRef(stmt.cmp) ? JSON.stringify(stmt.right) : num(stmt.right);
       head = "if (" + refExpr(stmt.cmp) + " " + (stmt.op || "===") + " " + right + ")";
     }
@@ -631,6 +688,7 @@ function markDrop(node, dest) {
     node.dataset.scriptId = dest.script.kind === "hook" ? dest.script.itemId + ":" + dest.script.hookId : dest.script.id;
   }
   if (dest.id) node.dataset.id = dest.id;
+  if (dest.slot) node.dataset.slot = dest.slot;
   return node;
 }
 function destFromNode(node) {
@@ -641,24 +699,75 @@ function destFromNode(node) {
     dest.script = { kind: "hook", itemId: parts[0], hookId: parts[1] };
   } else if (node.dataset.scriptKind) dest.script = { kind: node.dataset.scriptKind, id: node.dataset.scriptId };
   if (node.dataset.id) dest.id = node.dataset.id;
+  if (node.dataset.slot) dest.slot = node.dataset.slot;
   return dest;
-}
-function destAt(x, y) {
-  const hit = document.elementFromPoint(x, y);
-  const node = hit && hit.closest("[data-place]");
-  return destFromNode(node);
 }
 function canDropOn(dest) {
   if (!drag || !dest) return false;
-  if (dest.place === "trash") return drag.type === "stmt" || drag.type === "script";
+  if (dest.place === "trash") return drag.type === "stmt" || drag.type === "script" || drag.type === "var";
+  if (drag.type === "var") return dest.place === "socket";
   if (drag.type === "hat" || drag.type === "script") return dest.place === "workspace" || dest.place === "trash";
+  if (dest.place === "socket") return false;
   return dest.place !== "workspace" && dest.place !== "trash" && !!dest.script;
+}
+function snapAllowed(dest) {
+  if (!canDropOn(dest)) return false;
+  if (drag.type !== "stmt") return true;
+  if (dest.place === "after" && dest.id === drag.id) return false;
+  const found = locate(drag.id);
+  if (!found) return false;
+  if (wouldNestInSelf(found.stmt, dest)) return false;
+  if (dest.id && containsId(found.stmt, dest.id)) return false;
+  return true;
+}
+function pointDist(rect, x, y) {
+  const dx = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0;
+  const dy = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0;
+  return Math.hypot(dx, dy);
+}
+function overTrash(x, y) {
+  const rect = document.getElementById("trash").getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+function nearestSnap(x, y) {
+  const hit = document.elementFromPoint(x, y);
+  const direct = hit && hit.closest("[data-place]");
+  if (direct) {
+    const dest = destFromNode(direct);
+    if (dest && dest.place !== "workspace" && snapAllowed(dest)) return { node: direct, dest, dist: 0 };
+  }
+  let best = null;
+  let bestDist = SNAP_LIMIT;
+  let bestArea = Infinity;
+  document.querySelectorAll("[data-place]").forEach((node) => {
+    const dest = destFromNode(node);
+    if (!dest || dest.place === "workspace" || dest.place === "trash" || dest.place === "end" || !snapAllowed(dest)) return;
+    const rect = node.getBoundingClientRect();
+    const dist = pointDist(rect, x, y);
+    const area = rect.width * rect.height;
+    if (dist < bestDist || (dist === bestDist && area < bestArea)) {
+      bestDist = dist;
+      bestArea = area;
+      best = { node, dest, dist };
+    }
+  });
+  return best;
 }
 function highlightAt(x, y) {
   clearDrops();
-  const hit = document.elementFromPoint(x, y);
-  const node = hit && hit.closest("[data-place]");
-  if (node && canDropOn(destFromNode(node))) node.classList.add("drop-on");
+  if (!drag) return;
+  if (overTrash(x, y) && drag.type !== "hat" && drag.type !== "palette") {
+    document.getElementById("trash").classList.add("drop-on");
+    return;
+  }
+  if (drag.type === "script" || drag.type === "hat") {
+    const hit = document.elementFromPoint(x, y);
+    const node = hit && hit.closest("[data-place]");
+    if (node && canDropOn(destFromNode(node))) node.classList.add("drop-on");
+    return;
+  }
+  const snap = nearestSnap(x, y);
+  if (snap) snap.node.classList.add("drop-on");
 }
 function placeFromPointer(ev) {
   const pos = boardPos(ev.clientX, ev.clientY);
@@ -668,16 +777,28 @@ function placeFromPointer(ev) {
   };
 }
 function finishDrop(ev) {
-  const dest = destAt(ev.clientX, ev.clientY);
-  if (dest && dest.place === "trash") { dropTrash(); return; }
+  const onTrash = overTrash(ev.clientX, ev.clientY);
+  if (onTrash) {
+    if (drag.type === "hat" || drag.type === "palette") { note("Palette blocks are not deleted. Drag a stacked block here."); return; }
+    dropTrash();
+    return;
+  }
+  if (drag.type === "var") { dropVar(nearestSnap(ev.clientX, ev.clientY)); return; }
   if (drag.type === "script") {
     setScriptPos(drag.script, drag.liveX, drag.liveY);
     persist();
     note("Moved the stack.");
     return;
   }
-  if (drag.type === "hat") { dropHat(drag, placeFromPointer(ev), dest && dest.script); return; }
-  if (dest && canDropOn(dest)) { applyDrop(dest); return; }
+  if (drag.type === "hat") {
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    const node = hit && hit.closest("[data-place]");
+    const dest = destFromNode(node);
+    dropHat(drag, placeFromPointer(ev), dest && dest.script);
+    return;
+  }
+  const snap = nearestSnap(ev.clientX, ev.clientY);
+  if (snap && canDropOn(snap.dest)) { applyDrop(snap.dest); return; }
   dropLoose(placeFromPointer(ev));
 }
 function bindDrag(node, payload, stop) {
@@ -687,12 +808,18 @@ function bindDrag(node, payload, stop) {
     if (stop) e.stopPropagation();
     const origin = node;
     const box = origin.getBoundingClientRect();
+    let live = payload;
+    if (payload.type === "var" && payload.fromId) {
+      const found = locate(payload.fromId);
+      const slotValueNow = found && readSlot(found.stmt, payload.fromSlot);
+      if (slotValueNow) live = Object.assign({}, payload, { value: { root: slotValueNow.root, field: slotValueNow.field, x: slotValueNow.x, y: slotValueNow.y, z: slotValueNow.z } });
+    }
     drag = Object.assign({
       moved: false, startX: e.clientX, startY: e.clientY, ghost: null, origin,
       offsetX: e.clientX - box.left, offsetY: e.clientY - box.top,
       origLeft: parseFloat(origin.style.left) || 0,
       origTop: parseFloat(origin.style.top) || 0
-    }, payload);
+    }, live);
     didDrag = false;
     const onMove = (ev) => {
       if (!drag) return;
@@ -789,8 +916,57 @@ function dropLoose(pos) {
   document.body.dataset.panel = "stacks";
   render();
 }
+function readSlot(stmt, slot) {
+  if (slot === "who") return stmt.who ? { root: stmt.who } : null;
+  if (slot === "pos") return stmt.pos && stmt.pos.root ? stmt.pos : null;
+  if (slot === "value") return stmt.cmp && stmt.cmp.root ? stmt.cmp : null;
+  return null;
+}
+function writeSlot(stmt, slot, value) {
+  if (slot === "who") return { ...stmt, who: value ? value.root : "" };
+  if (slot === "pos") return { ...stmt, pos: value };
+  if (slot === "value") return { ...stmt, cmp: value ? { root: value.root, field: value.field || defaultField(value.root) } : null };
+  return stmt;
+}
+function slotValue(raw, slot) {
+  const value = { root: raw.root, field: raw.field, x: raw.x, y: raw.y, z: raw.z };
+  if (slot === "value" && value.root !== "xyz" && !value.field) value.field = defaultField(value.root);
+  if (slot === "pos" && value.root === "xyz") {
+    value.x = value.x == null ? "0" : value.x;
+    value.y = value.y == null ? "0" : value.y;
+    value.z = value.z == null ? "0" : value.z;
+  }
+  return value;
+}
+function dropVar(snap) {
+  if (!drag || drag.type !== "var") return;
+  if (!snap || snap.dest.place !== "socket") {
+    if (!drag.fromId) { note("Drop the variable into a round slot."); return; }
+    snapshot();
+    updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
+    note("Removed the variable.");
+    render();
+    return;
+  }
+  const dest = snap.dest;
+  const value = slotValue(drag.value, dest.slot);
+  if (drag.fromId === dest.id && drag.fromSlot === dest.slot) return;
+  snapshot();
+  if (drag.fromId) updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
+  updateStmt(dest.id, (stmt) => writeSlot(stmt, dest.slot, value));
+  note(varFits(value.root, dest.slot, dest.script) ? "Passed " + varLabel(value.root) + " into the block." : "That variable is gray because this block cannot use it.");
+  render();
+}
 function dropTrash() {
   if (!drag) return;
+  if (drag.type === "var") {
+    if (!drag.fromId) { note("Palette variables stay in the list."); return; }
+    snapshot();
+    updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
+    note("Removed the variable.");
+    render();
+    return;
+  }
   if (drag.type === "stmt") {
     snapshot();
     takeStmt(drag.id);
@@ -848,36 +1024,54 @@ function setFields(id, patch) {
   codeOnly();
   persist();
 }
-function whoMenu(stmt) {
-  return menu(stmt.who || "player", PLAYER_ROOTS, (who) => setFields(stmt.id, { who }));
-}
-function posMenu(stmt) {
-  const pos = stmt.pos || { root: "player" };
-  const bits = [menu(pos.root, POS_ROOTS, (root) => {
-    const next = { root };
-    if (root === "xyz") { next.x = pos.x || "0"; next.y = pos.y || "0"; next.z = pos.z || "0"; }
-    setFields(stmt.id, { pos: next }); render();
-  })];
-  if (pos.root === "xyz") {
-    bits.push(
-      bubble(pos.x || "0", (x) => setFields(stmt.id, { pos: { ...pos, x } })),
-      bubble(pos.y || "0", (y) => setFields(stmt.id, { pos: { ...pos, y } })),
-      bubble(pos.z || "0", (z) => setFields(stmt.id, { pos: { ...pos, z } }))
-    );
+function reporterChip(value, slot, script, stmtId) {
+  const bad = !varFits(value.root, slot, script);
+  const chip = el("span", {
+    class: "reporter" + (bad ? " bad" : ""),
+    title: bad ? "This variable does not belong on this block" : ""
+  }, [varLabel(value.root)]);
+  if (slot === "value" && value.root !== "xyz") {
+    const field = value.field || defaultField(value.root);
+    chip.append(menu(field, fieldsOf(value.root), (next) => setFields(stmtId, { cmp: { root: value.root, field: next } })));
   }
-  return bits;
+  if (slot === "pos" && value.root === "xyz") {
+    const axis = (key) => (raw) => {
+      const found = locate(stmtId);
+      const pos = (found && found.stmt.pos) || { root: "xyz", x: "0", y: "0", z: "0" };
+      setFields(stmtId, { pos: { ...pos, root: "xyz", [key]: raw } });
+    };
+    chip.append(bubble(value.x || "0", axis("x")), bubble(value.y || "0", axis("y")), bubble(value.z || "0", axis("z")));
+  }
+  return bindDrag(chip, {
+    type: "var",
+    value: { root: value.root, field: value.field, x: value.x, y: value.y, z: value.z },
+    fromId: stmtId,
+    fromSlot: slot
+  }, true);
 }
-function paintFields(stmt, row) {
+function socketNode(stmt, slot, script) {
+  const node = bindDrop(el("span", { class: "socket" }), { place: "socket", slot, id: stmt.id, script });
+  const value = readSlot(stmt, slot);
+  if (value) node.append(reporterChip(value, slot, script, stmt.id));
+  return node;
+}
+function paintFields(stmt, row, script) {
   if (stmt.kind === "playSound") row.append("play sound", menu(stmt.sound, SOUNDS, (sound) => setFields(stmt.id, { sound })));
-  if (stmt.kind === "particle") row.append("particle", menu(stmt.particle, PARTICLES, (particle) => setFields(stmt.id, { particle })), "at", ...posMenu(stmt));
-  if (stmt.kind === "heal") row.append("heal", whoMenu(stmt), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
-  if (stmt.kind === "damage") row.append("damage", whoMenu(stmt), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
-  if (stmt.kind === "velocity") row.append("push", whoMenu(stmt), "x", bubble(stmt.x, (x) => setFields(stmt.id, { x })), "y", bubble(stmt.y, (y) => setFields(stmt.id, { y })), "z", bubble(stmt.z, (z) => setFields(stmt.id, { z })));
-  if (stmt.kind === "giveItem") row.append("give", whoMenu(stmt), "id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })));
-  if (stmt.kind === "setBlock") row.append("set block", bubble(stmt.blockId, (blockId) => setFields(stmt.id, { blockId })), "at", ...posMenu(stmt));
-  if (stmt.kind === "spawnDrop") row.append("drop id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })), "at", ...posMenu(stmt));
+  if (stmt.kind === "particle") row.append("particle", menu(stmt.particle, PARTICLES, (particle) => setFields(stmt.id, { particle })), "at", socketNode(stmt, "pos", script));
+  if (stmt.kind === "heal") row.append("heal", socketNode(stmt, "who", script), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
+  if (stmt.kind === "damage") row.append("damage", socketNode(stmt, "who", script), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
+  if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", bubble(stmt.x, (x) => setFields(stmt.id, { x })), "y", bubble(stmt.y, (y) => setFields(stmt.id, { y })), "z", bubble(stmt.z, (z) => setFields(stmt.id, { z })));
+  if (stmt.kind === "giveItem") row.append("give", socketNode(stmt, "who", script), "id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })));
+  if (stmt.kind === "setBlock") row.append("set block", bubble(stmt.blockId, (blockId) => setFields(stmt.id, { blockId })), "at", socketNode(stmt, "pos", script));
+  if (stmt.kind === "spawnDrop") row.append("drop id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })), "at", socketNode(stmt, "pos", script));
   if (stmt.kind === "setTime") row.append("set time to", bubble(stmt.hours, (hours) => setFields(stmt.id, { hours })), "hours");
-  if (stmt.kind === "launch") row.append("launch speed", bubble(stmt.speed, (speed) => setFields(stmt.id, { speed })), "life", bubble(stmt.lifetime, (lifetime) => setFields(stmt.id, { lifetime })), "dmg", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })));
+  if (stmt.kind === "launch") {
+    const aim = stmt.aim || "look";
+    row.append("launch speed", bubble(stmt.speed, (speed) => setFields(stmt.id, { speed })), "life", bubble(stmt.lifetime, (lifetime) => setFields(stmt.id, { lifetime })), "dmg", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })),
+      "aim", menu(aim, AIM_MODES, (next) => { setFields(stmt.id, { aim: next }); render(); }));
+    if (aim === "angles") row.append("yaw", bubble(stmt.yaw || "0", (yaw) => setFields(stmt.id, { yaw })), "°", "pitch", bubble(stmt.pitch || "0", (pitch) => setFields(stmt.id, { pitch })), "°");
+    if (aim === "vector") row.append("x", bubble(stmt.dx || "0", (dx) => setFields(stmt.id, { dx })), "y", bubble(stmt.dy || "0", (dy) => setFields(stmt.id, { dy })), "z", bubble(stmt.dz || "1", (dz) => setFields(stmt.id, { dz })));
+  }
   if (stmt.kind === "callService") {
     const names = model.services.map((s) => s.name);
     if (stmt.name && !names.includes(stmt.name)) names.unshift(stmt.name);
@@ -894,10 +1088,7 @@ function stmtNode(stmt, script, depth) {
     bindDrop(row, after);
     const head = el("div", { class: "sb-head" });
     if (stmt.kind === "if") {
-      const cmp = stmt.cmp || { root: "player", field: "health" };
-      head.append("if",
-        menu(cmp.root, CMP_ROOTS, (root) => { setFields(stmt.id, { cmp: { root, field: defaultField(root) } }); render(); }),
-        menu(cmp.field, fieldsOf(cmp.root), (field) => setFields(stmt.id, { cmp: { ...cmp, field } })),
+      head.append("if", socketNode(stmt, "value", script),
         menu(stmt.op || "===", OPS, (op) => setFields(stmt.id, { op })),
         bubble(stmt.right, (right) => setFields(stmt.id, { right }), "cmp"), "then");
     } else if (stmt.kind === "rayIf") {
@@ -914,7 +1105,7 @@ function stmtNode(stmt, script, depth) {
   }
   const row = bindDrag(el("div", { class: "sb sb-stack", style: "--sb:" + color + ";z-index:" + z }), { type: "stmt", id: stmt.id }, true);
   bindDrop(row, after);
-  paintFields(stmt, row);
+  paintFields(stmt, row, script);
   row.append(xbtn(() => { takeStmt(stmt.id); }));
   return row;
 }
@@ -924,7 +1115,7 @@ function hat(color, kids, script) {
   return row;
 }
 function scriptBox(hatNode, body, script, rec) {
-  const box = bindDrag(el("div", { class: "script", style: "left:" + (rec.x || 36) + "px;top:" + (rec.y || 36) + "px" }), { type: "script", script });
+  const box = bindDrag(el("div", { class: "script" + (script.kind === "loose" ? " off-stack" : ""), style: "left:" + (rec.x || 36) + "px;top:" + (rec.y || 36) + "px" }), { type: "script", script });
   bindDrop(box, { script, place: "end" });
   if (hatNode) box.append(hatNode);
   else box.append(slot({ script, place: "start" }));
@@ -940,6 +1131,9 @@ function paletteStack(action) {
     if (!didDrag) placeNew(action[0], spawnPos());
   } }, [action[1]]), { type: "palette", kind: action[0] });
 }
+function paletteVar(entry) {
+  return bindDrag(el("div", { class: "reporter", role: "button" }, [entry[1]]), { type: "var", value: { root: entry[0] } });
+}
 
 function render() {
   migrate();
@@ -950,13 +1144,14 @@ function render() {
     onclick: () => { cat = id; document.body.dataset.panel = "palette"; document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.panel === "palette")); render(); }
   }, [labelText])));
   const fly = document.getElementById("fly");
-  const bits = [el("p", { class: "hint" }, ["Drag onto the board or onto a stack"])];
+  const bits = [el("p", { class: "hint" }, [cat === "vars" ? "Drag into a round slot. Gray means that block cannot use it." : "Drag onto the board or onto a stack"])];
   if (cat === "events") {
     bits.push(paletteHat("#ffbf00", "when item clicked", { type: "hat", hat: "item" }, () => dropHat({ hat: "item" }, spawnPos())));
     HOOKS.forEach(([id, labelText]) => bits.push(paletteHat("#ffbf00", "when " + labelText.toLowerCase(), { type: "hat", hat: "hook", hook: id }, () => dropHat({ hat: "hook", hook: id }, spawnPos()))));
     bits.push(paletteHat("#ff6680", "define my block", { type: "hat", hat: "service" }, () => dropHat({ hat: "service" }, spawnPos())));
     FEATURE_EVENTS.forEach(([id, labelText]) => bits.push(paletteHat("#0fbd8c", "when " + labelText, { type: "hat", hat: "feature", event: id }, () => dropHat({ hat: "feature", event: id }, spawnPos()))));
   }
+  if (cat === "vars") VAR_LIST.forEach((entry) => bits.push(paletteVar(entry)));
   ACTIONS.filter((a) => a[2] === cat).forEach((a) => bits.push(paletteStack(a)));
   fly.replaceChildren(...bits);
   const scripts = [];
@@ -973,7 +1168,7 @@ function render() {
   }));
   model.features.forEach((feature) => {
     const script = { kind: "feature", id: feature.id };
-    scripts.push(scriptBox(hat("#0fbd8c", ["when ", bubble(feature.name, (name) => { feature.name = name; codeOnly(); persist(); }, true), menu(feature.event || "onChat", FEATURE_EVENTS, (event) => { feature.event = event; codeOnly(); persist(); }), xbtn(() => { model.features = model.features.filter((f) => f.id !== feature.id); })], script), feature.body, script, feature));
+    scripts.push(scriptBox(hat("#0fbd8c", ["when ", bubble(feature.name, (name) => { feature.name = name; codeOnly(); persist(); }, true), menu(feature.event || "onChat", FEATURE_EVENTS, (event) => { feature.event = event; render(); }), xbtn(() => { model.features = model.features.filter((f) => f.id !== feature.id); })], script), feature.body, script, feature));
   });
   (model.loose || []).forEach((loose) => {
     const script = { kind: "loose", id: loose.id };
