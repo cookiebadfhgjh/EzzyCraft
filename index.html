@@ -3485,6 +3485,7 @@ let selected = 0;
 let health = MAX_HEALTH;
 let pvpEnabled = false;
 let pvpKnockback = 1;
+const pvpKnock = { x: 0, z: 0, carryX: 0, carryZ: 0 };
 let pvpTarget = null;
 let pvpAttackCooldown = 0;
 let pvpAttackCooldownDuration = 0.55;
@@ -3734,7 +3735,12 @@ function moveAxis(axis, amount) {
   if (collidesAt(player.pos.x, player.pos.y, player.pos.z)) {
     player.pos[axis] = old;
     if (axis === 'y') { if (amount < 0) player.onGround = true; player.vel.y = 0; }
-    else player.vel[axis] = 0;
+    else {
+      player.vel[axis] = 0;
+      pvpKnock[axis] = 0;
+      if (axis === 'x') pvpKnock.carryX = 0;
+      else pvpKnock.carryZ = 0;
+    }
   }
 }
 function enterCrouch() {
@@ -4745,6 +4751,7 @@ function parseSeed(s) {
   return h;
 }
 function resetPlayerStateForWorld() {
+  clearPvpKnockback();
   air = MAX_AIR; airTimer = 0; drownTimer = 0; wasHeadUnderwater = false;
   player.wasInWater = false; player.inWater = false; player.headInWater = false;
   player.wasInLava = false; player.inLava = false;
@@ -5861,6 +5868,7 @@ function applyCustomFeatureActions(definition, actions) {
             isSolid(getBlock(Math.floor(a), Math.floor(b) + 1, Math.floor(c)))) break;
         player.pos.set(a, b, c);
         player.vel.set(0, 0, 0);
+        clearPvpKnockback();
         break;
       case 'playSound':
         if (capabilities.has('effects') && typeof a === 'string' && Object.prototype.hasOwnProperty.call(SFX, a)) playSFX(a);
@@ -7914,12 +7922,41 @@ function pvpRespawnPoint() {
   while (y > 1 && !isSolid(getBlock(x, y, z))) y--;
   return { x: x + 0.5, y: y + 1.2, z: z + 0.5 };
 }
-function applyPvpKnockback(x, z, strength = pvpKnockback) {
+function clearPvpKnockback() {
+  pvpKnock.x = 0;
+  pvpKnock.z = 0;
+  pvpKnock.carryX = 0;
+  pvpKnock.carryZ = 0;
+}
+function attackerFacing(name) {
+  const cleaned = cleanName(name);
+  if (!cleaned) return null;
+  for (const other of remotePlayers.values()) {
+    if (other.name !== cleaned) continue;
+    return { x: -Math.sin(other.tyaw), z: -Math.cos(other.tyaw) };
+  }
+  return null;
+}
+function applyPvpKnockback(x, z, strength = pvpKnockback, attackerName) {
   const scale = Number.isFinite(strength) ? Math.max(0, Math.min(6, strength)) : 1;
   if (scale === 0) return;
-  player.vel.x += x * 5 * scale;
-  player.vel.y = Math.max(player.vel.y, 1.5 * scale);
-  player.vel.z += z * 5 * scale;
+  let dx = Number.isFinite(x) ? x : 0;
+  let dz = Number.isFinite(z) ? z : 0;
+  const len = Math.hypot(dx, dz);
+  if (len > 1e-4) {
+    dx /= len;
+    dz /= len;
+  } else {
+    const facing = attackerFacing(attackerName);
+    if (!facing) return;
+    dx = facing.x;
+    dz = facing.z;
+  }
+  // Direction is attacker → victim, so the hit carries them away from the attacker.
+  pvpKnock.x = dx * 11 * scale;
+  pvpKnock.z = dz * 11 * scale;
+  player.vel.y = Math.max(player.vel.y, Math.min(7, 4.8 * scale));
+  player.onGround = false;
 }
 function updatePvpCooldownUI() {
   const visible = !!NET.role && pvpEnabled && menuState === 'game';
@@ -8108,6 +8145,7 @@ function guestHandle(d) {
           Math.abs(d.x) > WORLD_W || Math.abs(d.y) > MAX_Y + 100 || Math.abs(d.z) > WORLD_D) break;
       player.pos.set(d.x, d.y, d.z);
       player.vel.set(0, 0, 0);
+      clearPvpKnockback();
       fallStartY = null;
       chatLine('', 'Teleported.', true);
       break;
@@ -8115,8 +8153,8 @@ function guestHandle(d) {
       if (!Number.isInteger(d.id) || typeof d.dead !== 'boolean') break;
       if (d.id === NET.selfId) {
         if (typeof d.amount === 'number' && d.amount > 0 && health > 0) {
-          applyPvpKnockback(Number(d.knockX) || 0, Number(d.knockZ) || 0,
-            Number.isFinite(d.knockback) ? d.knockback : pvpKnockback);
+          applyPvpKnockback(Number(d.knockX), Number(d.knockZ),
+            Number.isFinite(d.knockback) ? d.knockback : pvpKnockback, d.by);
           const attacker = cleanName(d.by) || 'another player';
           chatLine('', 'Hit by ' + attacker, true);
           damage(d.amount, 'Hit by ' + attacker, true);
@@ -8600,6 +8638,8 @@ function update(dt) {
       vx = (-s * iz + c * ix) * speed;
       vz = (-c * iz - s * ix) * speed;
     }
+    player.vel.x -= pvpKnock.carryX;
+    player.vel.z -= pvpKnock.carryZ;
     let fluidFallPush = false;
     if (flying) {
       const accel = 14;
@@ -8623,6 +8663,10 @@ function update(dt) {
       }
       fluidFallPush = push.inFluid && push.isWater && push.falling;
     } else { player.vel.x = vx; player.vel.z = vz; }
+    player.vel.x += pvpKnock.x;
+    player.vel.z += pvpKnock.z;
+    pvpKnock.carryX = pvpKnock.x;
+    pvpKnock.carryZ = pvpKnock.z;
 
     if (flying) {
       const targetY = keys['Space'] ? FLY_SPD : ((keys['ShiftLeft'] || keys['ShiftRight']) ? -FLY_SPD : 0);
@@ -8661,6 +8705,16 @@ function update(dt) {
     moveAxis('z', player.vel.z * dt);
     player.onGround = false;
     moveAxis('y', player.vel.y * dt);
+    if (pvpKnock.x !== 0 || pvpKnock.z !== 0) {
+      const grounded = player.onGround && !flying && !nowInWater && !nowInLava;
+      const keep = Math.pow(grounded ? 0.55 : 0.88, dt * 20);
+      pvpKnock.x *= keep;
+      pvpKnock.z *= keep;
+      if (Math.hypot(pvpKnock.x, pvpKnock.z) < 0.2) {
+        pvpKnock.x = 0;
+        pvpKnock.z = 0;
+      }
+    }
 
     if (flying || nowInWater || nowInLava) fallStartY = null;
     else if (player.onGround) {
