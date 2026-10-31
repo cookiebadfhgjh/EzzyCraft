@@ -77,6 +77,8 @@ type player struct {
 	lastAttack          time.Time
 	lastHealthEffect    time.Time
 	lastWorldTimeChange time.Time
+	pushWindow          time.Time
+	pushCount           int
 }
 
 // inMsg is every message a client can send; unused fields stay zero.
@@ -508,6 +510,8 @@ func (s *server) handle(p *player, m *inMsg) {
 		if isInt(m.ID) {
 			s.pvpAttack(p, int(m.ID), m)
 		}
+	case "player-push":
+		s.playerPush(p, m)
 	case "pvp-heal":
 		s.pvpHeal(p, m.Heal)
 	case "pvp-damage":
@@ -1241,6 +1245,33 @@ func (s *server) pvpAttack(a *player, targetID int, m *inMsg) {
 	}
 	s.sendTo(t, upd(damage))
 	s.broadcast(upd(0), t)
+}
+
+func (s *server) playerPush(p *player, m *inMsg) {
+	if p.dead || !isInt(m.ID) ||
+		math.IsNaN(m.VX) || math.IsNaN(m.VY) || math.IsNaN(m.VZ) ||
+		math.IsInf(m.VX, 0) || math.IsInf(m.VY, 0) || math.IsInf(m.VZ, 0) {
+		return
+	}
+	now := time.Now()
+	if now.Sub(p.pushWindow) >= 250*time.Millisecond {
+		p.pushWindow = now
+		p.pushCount = 0
+	}
+	if p.pushCount >= 8 {
+		return
+	}
+	target := s.players[int(m.ID)]
+	if target == nil || target.dead || target.id == p.id {
+		return
+	}
+	dx, dy, dz := target.x-p.x, target.y-p.y, target.z-p.z
+	if dx*dx+dy*dy+dz*dz > 18*18 {
+		return
+	}
+	p.pushCount++
+	clamp := func(v float64) float64 { return math.Max(-20, math.Min(20, v)) }
+	s.sendTo(target, M{"t": "player-push", "vx": clamp(m.VX), "vy": clamp(m.VY), "vz": clamp(m.VZ)})
 }
 
 func (s *server) pvpHeal(p *player, amount float64) {

@@ -212,7 +212,7 @@ The `api` passed to hooks and services exposes:
 | `api.world.setTime(hours)` / `api.world.time` | Request a world time from 0 to under 24 hours, and read the event's current time. Changing shared multiplayer time requires server-operator permission. |
 | `api.projectiles.launch(options)` | Launch a visible projectile. Options include `speed`, `lifetime`, `direction`, `origin`, and `damage`; a hit invokes `onProjectileHit`. A positive `damage` value automatically damages a player hit by the projectile in online PvP. |
 | `api.player.heal(amount)` / `damage(amount)` | Heal or damage the local player, subject to gameplay and server rules. |
-| `api.player.addVelocity(x, y, z)` | Apply a velocity change to the local player. |
+| `api.player.addVelocity(x, y, z, playerId)` | Shove a player in blocks per second, at most 20 on each axis. Leave out `playerId` to shove yourself. A different player has to be within 18 blocks; the server delivers that shove to them. |
 | `api.players.list()` / `get(id)` | Read the event's player snapshot(s); these are data, not controls for other players. |
 | `api.effects.playSound(name)` | Play a built-in sound effect. |
 | `api.effects.particle(name, x, y, z)` | Spawn a supported particle effect (`break`, `smoke`, `bubble`, `water`, or `lava`) near the player. |

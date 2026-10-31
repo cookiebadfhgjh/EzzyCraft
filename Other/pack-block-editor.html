@@ -362,7 +362,7 @@ let model = {
   services: [{ id: "svc1", name: "playPickup", x: 36, y: 36, body: [{ id: "s1", kind: "playSound", sound: "pickup" }] }],
   items: [{ id: "item1", key: "magicSword", hooks: [{ id: "hook1", name: "onUse", x: 340, y: 36, body: [
     { id: "s2", kind: "callService", name: "playPickup" },
-    { id: "s3", kind: "velocity", x: "0", y: "0.8", z: "0", who: { producer: "hat", kind: "player", field: "" } }
+    { id: "s3", kind: "velocity", x: "0", y: "8", z: "0", who: { producer: "hat", kind: "player", field: "" } }
   ] }] }],
   features: [{ id: "feat1", name: "chatListener", event: "onChat", x: 36, y: 280, body: [
     { id: "s4", kind: "if", cmp: { producer: "hat", kind: "event", field: "message" }, op: "===", right: "hello", then: [
@@ -500,7 +500,7 @@ function fresh(kind) {
   if (kind === "playSound") return { id, kind, sound: "pickup" };
   if (kind === "particle") return { id, kind, particle: "smoke", pos: null };
   if (kind === "heal" || kind === "damage") return { id, kind, amount: "2", who: null };
-  if (kind === "velocity") return { id, kind, x: "0", y: "0.8", z: "0", who: null };
+  if (kind === "velocity") return { id, kind, x: "0", y: "8", z: "0", who: { producer: "hat", kind: "player", field: "" } };
   if (kind === "teleport") return { id, kind, who: null, pos: null };
   if (kind === "say") return { id, kind, text: "hello" };
   if (kind === "shake") return { id, kind, amount: "0.4" };
@@ -817,8 +817,11 @@ function emitStmt(stmt, indent, script) {
   if (stmt.kind === "shake") return n + "api.effects.shake(" + numExpr(stmt.amount, script, stmt.id) + ");\n";
   if (stmt.kind === "velocity") {
     const who = slotReady(stmt, "who", script);
-    if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
-    return n + "if (" + whoExpr(who) + ") api.player.addVelocity(" + numExpr(stmt.x, script, stmt.id) + ", " + numExpr(stmt.y, script, stmt.id) + ", " + numExpr(stmt.z, script, stmt.id) + ");\n";
+    const speeds = numExpr(stmt.x, script, stmt.id) + ", " + numExpr(stmt.y, script, stmt.id) + ", " + numExpr(stmt.z, script, stmt.id);
+    if (who === false) return n + "/* player variable is not available here */\n";
+    if (!who) return n + "api.player.addVelocity(" + speeds + ");\n";
+    const target = whoExpr(who);
+    return n + "if (" + target + ") api.player.addVelocity(" + speeds + ", " + target + ".id);\n";
   }
   if (stmt.kind === "giveItem") {
     const who = slotReady(stmt, "who", script);
@@ -1525,7 +1528,7 @@ function paintFields(stmt, row, script) {
   if (stmt.kind === "particle") row.append("particle", menu(stmt.particle, PARTICLES, (particle) => setFields(stmt.id, { particle })), "at", socketNode(stmt, "pos", script));
   if (stmt.kind === "heal") row.append("heal", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
   if (stmt.kind === "damage") row.append("damage", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
-  if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", numSocket(stmt, "x", script), "y", numSocket(stmt, "y", script), "z", numSocket(stmt, "z", script));
+  if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", numSocket(stmt, "x", script), "y", numSocket(stmt, "y", script), "z", numSocket(stmt, "z", script), "blocks/s");
   if (stmt.kind === "teleport") row.append("move", socketNode(stmt, "who", script), "to", socketNode(stmt, "pos", script));
   if (stmt.kind === "say") row.append("say", exprSocket(stmt, "text", script, ["str"]));
   if (stmt.kind === "shake") row.append("shake camera", numSocket(stmt, "amount", script));

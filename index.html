@@ -3486,6 +3486,7 @@ let health = MAX_HEALTH;
 let pvpEnabled = false;
 let pvpKnockback = 1;
 const pvpKnock = { x: 0, z: 0, carryX: 0, carryZ: 0 };
+const modPush = { x: 0, z: 0, carryX: 0, carryZ: 0 };
 let pvpTarget = null;
 let pvpAttackCooldown = 0;
 let pvpAttackCooldownDuration = 0.55;
@@ -3738,8 +3739,9 @@ function moveAxis(axis, amount) {
     else {
       player.vel[axis] = 0;
       pvpKnock[axis] = 0;
-      if (axis === 'x') pvpKnock.carryX = 0;
-      else pvpKnock.carryZ = 0;
+      modPush[axis] = 0;
+      if (axis === 'x') { pvpKnock.carryX = 0; modPush.carryX = 0; }
+      else { pvpKnock.carryZ = 0; modPush.carryZ = 0; }
     }
   }
 }
@@ -4752,6 +4754,7 @@ function parseSeed(s) {
 }
 function resetPlayerStateForWorld() {
   clearPvpKnockback();
+  clearModPush();
   air = MAX_AIR; airTimer = 0; drownTimer = 0; wasHeadUnderwater = false;
   player.wasInWater = false; player.inWater = false; player.headInWater = false;
   player.wasInLava = false; player.inLava = false;
@@ -5564,7 +5567,7 @@ function createCustomFeatureRunner(pack) {
         player: Object.freeze({
           heal: amount => push('player', 'heal', [amount]),
           damage: amount => push('player', 'damage', [amount]),
-          addVelocity: (x, y, z) => push('player', 'addVelocity', [x, y, z]),
+          addVelocity: (x, y, z, playerId) => push('player', 'addVelocity', [x, y, z, playerId]),
           teleport: (x, y, z) => push('player', 'teleport', [x, y, z]),
         }),
         chat: Object.freeze({
@@ -5856,11 +5859,20 @@ function applyCustomFeatureActions(definition, actions) {
           damage(a, 'Custom item effect');
         }
         break;
-      case 'addVelocity':
-        if (!capabilities.has('player') || ![a, b, c].every(Number.isFinite) ||
-            Math.abs(a) > 20 || Math.abs(b) > 20 || Math.abs(c) > 20) break;
-        player.vel.x += a; player.vel.y += b; player.vel.z += c;
+      case 'addVelocity': {
+        if (!capabilities.has('player') || ![a, b, c].every(Number.isFinite)) break;
+        const clampPush = value => Math.max(-20, Math.min(20, value));
+        const px = clampPush(a), py = clampPush(b), pz = clampPush(c);
+        const targetId = Number.isInteger(d) ? d : null;
+        if (targetId != null && NET.role && targetId !== NET.selfId) {
+          if (remotePlayers.has(targetId) && NET.hostConn && NET.hostConn.open) {
+            NET.hostConn.send({ t: 'player-push', id: targetId, vx: px, vy: py, vz: pz });
+          }
+          break;
+        }
+        addModPush(px, py, pz);
         break;
+      }
       case 'teleport':
         if (!capabilities.has('player') || !validPosition(a, b, c) ||
             !inBounds2(Math.floor(a), Math.floor(b), Math.floor(c))) break;
@@ -5869,6 +5881,7 @@ function applyCustomFeatureActions(definition, actions) {
         player.pos.set(a, b, c);
         player.vel.set(0, 0, 0);
         clearPvpKnockback();
+        clearModPush();
         break;
       case 'playSound':
         if (capabilities.has('effects') && typeof a === 'string' && Object.prototype.hasOwnProperty.call(SFX, a)) playSFX(a);
@@ -7928,6 +7941,20 @@ function clearPvpKnockback() {
   pvpKnock.carryX = 0;
   pvpKnock.carryZ = 0;
 }
+function clearModPush() {
+  modPush.x = 0;
+  modPush.z = 0;
+  modPush.carryX = 0;
+  modPush.carryZ = 0;
+}
+function addModPush(x, y, z) {
+  const cap = 20;
+  const clamp = value => Math.max(-cap, Math.min(cap, value));
+  modPush.x = clamp(modPush.x + x);
+  modPush.z = clamp(modPush.z + z);
+  player.vel.y = clamp(player.vel.y + y);
+  if (y > 0) player.onGround = false;
+}
 function attackerFacing(name) {
   const cleaned = cleanName(name);
   if (!cleaned) return null;
@@ -8146,8 +8173,17 @@ function guestHandle(d) {
       player.pos.set(d.x, d.y, d.z);
       player.vel.set(0, 0, 0);
       clearPvpKnockback();
+      clearModPush();
       fallStartY = null;
       chatLine('', 'Teleported.', true);
+      break;
+    case 'player-push':
+      if ([d.vx, d.vy, d.vz].every(Number.isFinite)) {
+        addModPush(
+          Math.max(-20, Math.min(20, d.vx)),
+          Math.max(-20, Math.min(20, d.vy)),
+          Math.max(-20, Math.min(20, d.vz)));
+      }
       break;
     case 'pvp-health': {
       if (!Number.isInteger(d.id) || typeof d.dead !== 'boolean') break;
@@ -8638,8 +8674,8 @@ function update(dt) {
       vx = (-s * iz + c * ix) * speed;
       vz = (-c * iz - s * ix) * speed;
     }
-    player.vel.x -= pvpKnock.carryX;
-    player.vel.z -= pvpKnock.carryZ;
+    player.vel.x -= pvpKnock.carryX + modPush.carryX;
+    player.vel.z -= pvpKnock.carryZ + modPush.carryZ;
     let fluidFallPush = false;
     if (flying) {
       const accel = 14;
@@ -8663,10 +8699,12 @@ function update(dt) {
       }
       fluidFallPush = push.inFluid && push.isWater && push.falling;
     } else { player.vel.x = vx; player.vel.z = vz; }
-    player.vel.x += pvpKnock.x;
-    player.vel.z += pvpKnock.z;
+    player.vel.x += pvpKnock.x + modPush.x;
+    player.vel.z += pvpKnock.z + modPush.z;
     pvpKnock.carryX = pvpKnock.x;
     pvpKnock.carryZ = pvpKnock.z;
+    modPush.carryX = modPush.x;
+    modPush.carryZ = modPush.z;
 
     if (flying) {
       const targetY = keys['Space'] ? FLY_SPD : ((keys['ShiftLeft'] || keys['ShiftRight']) ? -FLY_SPD : 0);
@@ -8705,15 +8743,19 @@ function update(dt) {
     moveAxis('z', player.vel.z * dt);
     player.onGround = false;
     moveAxis('y', player.vel.y * dt);
-    if (pvpKnock.x !== 0 || pvpKnock.z !== 0) {
+    if (pvpKnock.x !== 0 || pvpKnock.z !== 0 || modPush.x !== 0 || modPush.z !== 0) {
       const grounded = player.onGround && !flying && !nowInWater && !nowInLava;
       const keep = Math.pow(grounded ? 0.55 : 0.88, dt * 20);
       pvpKnock.x *= keep;
       pvpKnock.z *= keep;
+      modPush.x *= keep;
+      modPush.z *= keep;
       if (Math.hypot(pvpKnock.x, pvpKnock.z) < 0.2) {
         pvpKnock.x = 0;
         pvpKnock.z = 0;
       }
+      if (Math.abs(modPush.x) < 0.15) modPush.x = 0;
+      if (Math.abs(modPush.z) < 0.15) modPush.z = 0;
     }
 
     if (flying || nowInWater || nowInLava) fallStartY = null;

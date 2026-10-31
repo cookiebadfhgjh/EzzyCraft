@@ -121,6 +121,28 @@ func TestPvpAttackAppliesWeaponKnockbackMultiplier(t *testing.T) {
 	}
 }
 
+func TestPlayerPushReachesNearbyTargetAndClampsSpeed(t *testing.T) {
+	attacker := &player{id: 1, name: "Attacker", x: 0, y: 0, z: 0, send: make(chan []byte, 2)}
+	target := &player{id: 2, name: "Target", x: 3, y: 0, z: 0, health: maxHealth, send: make(chan []byte, 2)}
+	s := &server{players: map[int]*player{attacker.id: attacker, target.id: target}}
+	s.playerPush(attacker, &inMsg{ID: 2, VX: 40, VY: 4, VZ: -3})
+	var message map[string]any
+	if err := json.Unmarshal(<-target.send, &message); err != nil {
+		t.Fatalf("invalid push JSON: %v", err)
+	}
+	if message["t"] != "player-push" || message["vx"] != float64(20) || message["vy"] != float64(4) || message["vz"] != float64(-3) {
+		t.Fatalf("push response = %#v, want clamped velocity 20, 4, -3", message)
+	}
+	far := &player{id: 3, name: "Far", x: 100, y: 0, z: 0, health: maxHealth, send: make(chan []byte, 1)}
+	s.players[far.id] = far
+	s.playerPush(attacker, &inMsg{ID: 3, VX: 5, VY: 0, VZ: 0})
+	select {
+	case extra := <-far.send:
+		t.Fatalf("distant push was delivered: %s", extra)
+	default:
+	}
+}
+
 func TestPvpHealIsRateLimitedAndServerAuthoritative(t *testing.T) {
 	member := &player{id: 2, health: 10, send: make(chan []byte, 2)}
 	s := &server{pvp: true}
