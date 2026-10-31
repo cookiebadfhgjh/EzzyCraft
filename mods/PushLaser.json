@@ -1,7 +1,7 @@
 {
   "schema": "coop1.10.item-block-pack.v2",
   "id": "PushLaser",
-  "name": "Co-op item pack",
+  "name": "PushLaser",
   "entries": [
     {
       "type": "item",
@@ -316,6 +316,6 @@
   ],
   "javascript": {
     "runtime": "coop1.10.pack-javascript.v1",
-    "source": "({\n  services: {\n\n  },\n  items: {\n    PushLaser: {\n      onUse(game, api, event) {\n        const player = event.player;\n        const players = event.players || [];\n        const world = event.world;\n        const block = event.target && event.target.type === \"block\"\n          ? event.target\n          : event.hit && event.hit.type === \"block\"\n            ? event.hit\n            : (event.position && (event.type === \"block\" || event.type === \"block-use\")\n              ? { id: event.id, type: \"block\", position: event.position, face: event.face }\n              : null);\n        if (((game.services.rayTrace(12, 1)[0] || {}).type === \"player\")) {\n          if (player) api.player.addVelocity(5, 5, 3);\n        }\n      }\n    }\n  },\n  features: {\n\n  }\n})"
+    "source": "({\n  services: {\n\n  },\n  items: {\n    PushLaser: {\n      onUse(game, api, event) {\n        const player = event.player;\n        const players = event.players || [];\n        const world = event.world;\n        const block = event.target && event.target.type === \"block\"\n          ? event.target\n          : event.hit && event.hit.type === \"block\"\n            ? event.hit\n            : (event.position && (event.type === \"block\" || event.type === \"block-use\")\n              ? { id: event.id, type: \"block\", position: event.position, face: event.face }\n              : null);\n        const _ray_s44 = (game.services.rayTrace(12, 1)[0] || null);\n        if (_ray_s44 && _ray_s44.type === \"player\") {\n          if ((_ray_s44 ? _ray_s44.player : null)) api.player.addVelocity(Math.max(15, ((_ray_s44 && _ray_s44.player && _ray_s44.player.position ? _ray_s44.player.position.x : 0) + 5)), 0, Math.max(15, ((_ray_s44 && _ray_s44.player && _ray_s44.player.position ? _ray_s44.player.position.z : 0) + 5)));\n        }\n      }\n    }\n  },\n  features: {\n\n  }\n})"
   }
 }

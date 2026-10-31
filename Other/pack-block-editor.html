@@ -95,9 +95,9 @@
     border-radius: 0 0 6px 6px;
     z-index: 4;
   }
-  .sb-hat { margin-top: 0; padding-top: 14px; border-radius: 18px 18px 4px 4px; }
+  .sb-hat { margin-top: 0; padding-top: 14px; border-radius: 18px 18px 4px 4px; flex-wrap: wrap; max-width: 720px; row-gap: 6px; white-space: normal; }
   .sb-c { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; padding: 8px 8px 0; white-space: normal; width: auto; }
-  .sb-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px 6px 2px; white-space: nowrap; }
+  .sb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px 6px 2px; white-space: normal; }
   .sb-mouth {
     --behind: color-mix(in srgb, var(--sb) 68%, #000);
     min-height: 36px;
@@ -136,13 +136,19 @@
   .reporter:active { cursor: grabbing; }
   .reporter.dragging { opacity: .4; pointer-events: none; }
   .reporter.bad { filter: grayscale(1); opacity: .5; }
+  .reporter.math { background: #59c059; }
   .socket {
     display: inline-flex; align-items: center; min-height: 26px; min-width: 36px; padding: 2px;
     border-radius: 999px; background: rgba(0,0,0,.25); box-shadow: inset 0 1px 0 rgba(0,0,0,.22);
   }
   .socket:empty::before { content: ""; width: 22px; height: 16px; margin: 0 4px; border-radius: 999px; background: rgba(255,255,255,.28); }
   .socket.drop-on { background: #ffd500; outline: 2px solid #ffbf00; }
+  .socket.t-str, .socket.t-bool { border-radius: 6px; }
   .fly .reporter { margin: 4px 0; align-self: flex-start; }
+  .mini { height: 22px; border: 0; border-radius: 11px; background: rgba(255,255,255,.22); color: #fff; font-size: 11px; font-weight: 800; padding: 0 8px; }
+  .var-menu { position: fixed; z-index: 90; min-width: 176px; max-height: 280px; overflow: auto; padding: 6px; background: #fff; border-radius: 10px; box-shadow: 0 10px 28px rgba(0,0,0,.22); }
+  .var-menu button { display: block; width: 100%; height: auto; margin: 0; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-weight: 700; text-align: left; }
+  .var-menu button.on, .var-menu button:hover { background: #ff8c1a; color: #fff; }
   @media (max-width: 900px) {
     .tabs { display: flex; }
     .app { grid-template-columns: 1fr; height: calc(100% - 92px); }
@@ -160,7 +166,7 @@
   <div class="mark">B</div>
   <div class="grow">
     <h1>Pack Blocks</h1>
-    <p id="notice">Drag variables into the round slots. Blocks snap to the nearest stack when dropped close by.</p>
+    <p id="notice">Drop a value into a slot of the same type. Math blocks go in number slots.</p>
   </div>
   <div class="trash" id="trash">Drop to delete</div>
   <button class="flag gray" id="undo" type="button">Undo</button>
@@ -193,23 +199,119 @@ const PARTICLES = ["smoke", "bubble", "water", "lava", "break"];
 const OPS = ["===", "!==", "<", "<=", ">", ">="];
 const CATS = [
   ["events", "Events", "#ffbf00"], ["sound", "Sound", "#cf63cf"], ["motion", "Motion", "#4c97ff"],
-  ["looks", "World", "#9966ff"], ["sensing", "Sensing", "#5cb1d6"], ["vars", "Variables", "#ff8c1a"],
+  ["looks", "World", "#9966ff"], ["sensing", "Sensing", "#5cb1d6"],
+  ["math", "Math", "#59c059"],
   ["control", "Control", "#ffab19"], ["myblocks", "My Blocks", "#ff6680"]
 ];
-const VAR_LIST = [
-  ["player", "player", ["who", "pos", "value"], null, false],
-  ["attackedPlayer", "attacked player", ["who", "pos", "value"], ["onHit", "onProjectileHit"], false],
-  ["clickedBy", "clicked by", ["who", "pos", "value"], ["onBlockUse"], false],
-  ["senderPlayer", "sender", ["who", "pos", "value"], ["onChat"], false],
-  ["joinedPlayer", "joined player", ["who", "value"], ["onPlayerJoin"], false],
-  ["leavingPlayer", "leaving player", ["who", "value"], ["onPlayerLeave"], false],
-  ["block", "block", ["pos", "value"], ["onUse", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"], false],
-  ["hit", "hit", ["pos", "value"], ["onProjectileHit"], false],
-  ["event", "event", ["pos", "value"], null, false],
-  ["world", "world", ["value"], null, false],
-  ["item", "item", ["value"], ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onTick", "onProjectileHit"], true],
-  ["xyz", "x y z", ["pos"], null, false]
+const MATH = [
+  ["+", "+", 2, "infix"], ["-", "−", 2, "infix"], ["*", "×", 2, "infix"], ["/", "÷", 2, "infix"],
+  ["%", "mod", 2, "infix"], ["**", "^", 2, "infix"],
+  ["min", "min", 2, "prefix"], ["max", "max", 2, "prefix"],
+  ["abs", "abs", 1, "prefix"], ["round", "round", 1, "prefix"], ["floor", "floor", 1, "prefix"],
+  ["ceil", "ceil", 1, "prefix"], ["sqrt", "√", 1, "prefix"],
+  ["sin", "sin", 1, "prefix"], ["cos", "cos", 1, "prefix"], ["tan", "tan", 1, "prefix"],
+  ["random", "random", 2, "random"]
 ];
+function part(id, label, slots, extra) {
+  return Object.assign({ id, label, slots, path: extra && extra.path != null ? extra.path : id }, extra || {});
+}
+const PLAYER_PARTS = [
+  part("", "player", ["who"], { path: "" }),
+  part("name", "name", ["value"], { str: true }),
+  part("id", "id", ["value"]),
+  part("health", "health", ["value"]),
+  part("dead", "dead", ["value"], { bool: true }),
+  part("position", "position", ["pos"], { posPath: "position" }),
+  part("position.x", "x", ["value"]),
+  part("position.y", "y", ["value"]),
+  part("position.z", "z", ["value"]),
+  part("yaw", "yaw", ["value"]),
+  part("pitch", "pitch", ["value"]),
+  part("gameMode", "mode", ["value"], { str: true })
+];
+const POS_PARTS = [
+  part("position", "position", ["pos"], { posPath: "position" }),
+  part("position.x", "x", ["value"]),
+  part("position.y", "y", ["value"]),
+  part("position.z", "z", ["value"])
+];
+const FACE_PARTS = [
+  part("face.x", "face x", ["value"]),
+  part("face.y", "face y", ["value"]),
+  part("face.z", "face z", ["value"])
+];
+const KINDS = {
+  player: { label: "player", expr: "player", fields: PLAYER_PARTS },
+  attackedPlayer: { label: "attacked player", expr: "event.attackedPlayer", fields: PLAYER_PARTS.filter((p) => p.id !== "yaw" && p.id !== "pitch" && p.id !== "gameMode") },
+  clickedBy: { label: "clicked by", expr: "event.clickedBy", fields: PLAYER_PARTS },
+  senderPlayer: { label: "sender", expr: "event.senderPlayer", fields: PLAYER_PARTS.filter((p) => p.id !== "gameMode") },
+  joinedPlayer: { label: "joined player", expr: "event.joinedPlayer", fields: [
+    part("", "player", ["who"], { path: "" }),
+    part("name", "name", ["value"], { str: true }),
+    part("id", "id", ["value"])
+  ] },
+  leavingPlayer: { label: "leaving player", expr: "event.leavingPlayer", fields: [
+    part("", "player", ["who"], { path: "" }),
+    part("name", "name", ["value"], { str: true }),
+    part("id", "id", ["value"])
+  ] },
+  block: { label: "block", expr: "block", fields: [
+    part("", "block", ["pos"], { path: "", posPath: "position" }),
+    part("id", "id", ["value"]),
+    part("type", "type", ["value"], { str: true }),
+    ...POS_PARTS,
+    ...FACE_PARTS
+  ] },
+  hit: { label: "hit", expr: "event.hit", fields: [
+    part("", "hit", ["pos"], { path: "", posPath: "position" }),
+    part("type", "type", ["value"], { str: true }),
+    part("id", "id", ["value"]),
+    ...POS_PARTS,
+    ...FACE_PARTS
+  ] },
+  event: { label: "event", expr: "event", fields: [
+    part("type", "type", ["value"], { str: true }),
+    part("message", "message", ["value"], { str: true, when: ["onChat"] }),
+    part("sender", "sender", ["value"], { str: true, when: ["onChat"] }),
+    part("dt", "tick", ["value"], { when: ["onTick"] }),
+    part("position", "position", ["pos"], { posPath: "position", when: ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"] }),
+    part("position.x", "x", ["value"], { when: ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"] }),
+    part("position.y", "y", ["value"], { when: ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"] }),
+    part("position.z", "z", ["value"], { when: ["onUse", "onHit", "onBlockUse", "onBlockBreak", "onBlockPlace", "onProjectileHit"] })
+  ] },
+  world: { label: "world", expr: "world", fields: [part("time", "time", ["value"])] },
+  item: { label: "item", expr: "event.item", fields: [
+    part("id", "id", ["value"]),
+    part("name", "name", ["value"], { str: true }),
+    part("kind", "kind", ["value"], { str: true })
+  ] },
+  rayPlayer: { label: "looked-at player", expr: "", fields: [
+    part("", "player", ["who"], { path: "player" }),
+    part("health", "health", ["value"], { path: "player.health" }),
+    part("name", "name", ["value"], { path: "player.name", str: true }),
+    part("id", "id", ["value"], { path: "player.id" }),
+    part("dead", "dead", ["value"], { path: "player.dead", bool: true }),
+    part("position", "position", ["pos"], { path: "player.position", posPath: "player.position" }),
+    part("position.x", "x", ["value"], { path: "player.position.x" }),
+    part("position.y", "y", ["value"], { path: "player.position.y" }),
+    part("position.z", "z", ["value"], { path: "player.position.z" }),
+    part("hit", "hit position", ["pos"], { path: "position", posPath: "position" }),
+    part("distance", "distance", ["value"], { path: "distance" })
+  ] },
+  rayBlock: { label: "looked-at block", expr: "", fields: [
+    part("", "block", ["pos"], { path: "", posPath: "position" }),
+    part("id", "id", ["value"], { path: "id" }),
+    part("distance", "distance", ["value"], { path: "distance" }),
+    part("position", "position", ["pos"], { path: "position", posPath: "position" }),
+    part("position.x", "x", ["value"], { path: "position.x" }),
+    part("position.y", "y", ["value"], { path: "position.y" }),
+    part("position.z", "z", ["value"], { path: "position.z" }),
+    part("blockPosition.x", "block x", ["value"], { path: "blockPosition.x" }),
+    part("blockPosition.y", "block y", ["value"], { path: "blockPosition.y" }),
+    part("blockPosition.z", "block z", ["value"], { path: "blockPosition.z" }),
+    ...FACE_PARTS
+  ] }
+};
 const SNAP_LIMIT = 64;
 const AIM_MODES = [["look", "looking"], ["angles", "yaw / pitch"], ["vector", "x y z"]];
 const ACTIONS = [
@@ -229,35 +331,6 @@ const ACTIONS = [
   ["returnHit", "hit power", "control", "#ffab19"],
   ["callService", "call", "myblocks", "#ff6680"]
 ];
-const PLAYER_FIELDS = [
-  ["name", "name"], ["id", "id"], ["health", "health"], ["dead", "dead"],
-  ["position.x", "x"], ["position.y", "y"], ["position.z", "z"],
-  ["yaw", "yaw"], ["pitch", "pitch"], ["gameMode", "mode"]
-];
-const ROOTS = {
-  player: { expr: "player", fields: PLAYER_FIELDS },
-  attackedPlayer: { expr: "event.attackedPlayer", fields: PLAYER_FIELDS },
-  clickedBy: { expr: "event.clickedBy", fields: PLAYER_FIELDS },
-  senderPlayer: { expr: "event.senderPlayer", fields: PLAYER_FIELDS },
-  joinedPlayer: { expr: "event.joinedPlayer", fields: [["name", "name"], ["id", "id"]] },
-  leavingPlayer: { expr: "event.leavingPlayer", fields: [["name", "name"], ["id", "id"]] },
-  block: { expr: "block", fields: [
-    ["type", "type"], ["id", "id"],
-    ["position.x", "x"], ["position.y", "y"], ["position.z", "z"],
-    ["face.x", "face x"], ["face.y", "face y"], ["face.z", "face z"]
-  ] },
-  hit: { expr: "event.hit", fields: [
-    ["type", "type"], ["id", "id"],
-    ["position.x", "x"], ["position.y", "y"], ["position.z", "z"]
-  ] },
-  event: { expr: "event", fields: [
-    ["type", "type"], ["message", "message"], ["sender", "sender"], ["dt", "tick"],
-    ["position.x", "x"], ["position.y", "y"], ["position.z", "z"]
-  ] },
-  world: { expr: "world", fields: [["time", "time"]] },
-  item: { expr: "event.item", fields: [["id", "id"], ["name", "name"], ["kind", "kind"]] }
-};
-const STR_FIELDS = { name: 1, id: 1, type: 1, message: 1, sender: 1, kind: 1, gameMode: 1 };
 const STORE = "ezzycraft-pack-blocks";
 let seq = 10;
 const uid = (p) => p + (++seq);
@@ -266,14 +339,15 @@ let drag = null;
 let didDrag = false;
 let history = [];
 let spawnN = 0;
+let varMenu = null;
 let model = {
   services: [{ id: "svc1", name: "playPickup", x: 36, y: 36, body: [{ id: "s1", kind: "playSound", sound: "pickup" }] }],
   items: [{ id: "item1", key: "magicSword", hooks: [{ id: "hook1", name: "onUse", x: 340, y: 36, body: [
     { id: "s2", kind: "callService", name: "playPickup" },
-    { id: "s3", kind: "velocity", x: "0", y: "0.8", z: "0" }
+    { id: "s3", kind: "velocity", x: "0", y: "0.8", z: "0", who: { producer: "hat", kind: "player", field: "" } }
   ] }] }],
   features: [{ id: "feat1", name: "chatListener", event: "onChat", x: 36, y: 280, body: [
-    { id: "s4", kind: "if", cmp: { root: "event", field: "message" }, op: "===", right: "hello", then: [
+    { id: "s4", kind: "if", cmp: { producer: "hat", kind: "event", field: "message" }, op: "===", right: "hello", then: [
       { id: "s5", kind: "playSound", sound: "pickup" }
     ] }
   ] }],
@@ -285,17 +359,30 @@ function actionColor(kind) { return (ACTIONS.find((a) => a[0] === kind) || [,,, 
 function actionLabel(kind) { return (ACTIONS.find((a) => a[0] === kind) || [, kind])[1]; }
 function hookLabel(name) { return (HOOKS.find((h) => h[0] === name) || [, name])[1]; }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
-function rootMeta(root) { return ROOTS[root] || ROOTS.event; }
-function fieldsOf(root) { return rootMeta(root).fields; }
-function defaultField(root) { return (fieldsOf(root)[0] || ["name"])[0]; }
-function isStrField(field) { const leaf = String(field || "").split(".").pop(); return !!STR_FIELDS[leaf]; }
-function isStrRef(ref) {
-  if (!ref || !ref.field) return false;
-  if (ref.field === "id") return /player|Player|clickedBy/.test(ref.root || "");
-  return isStrField(ref.field);
+function fieldDef(kind, fieldId) {
+  const kindDef = KINDS[kind];
+  if (!kindDef) return null;
+  return kindDef.fields.find((field) => field.id === (fieldId || "")) || null;
 }
-function varSpec(root) { return VAR_LIST.find((entry) => entry[0] === root); }
-function varLabel(root) { return (varSpec(root) || [, root])[1]; }
+function fieldsFor(kind, script) {
+  const kindDef = KINDS[kind];
+  if (!kindDef) return [];
+  const event = script ? scriptEvent(script) : null;
+  return kindDef.fields.filter((field) => !field.when || (event && field.when.indexOf(event) >= 0));
+}
+function refLabel(ref) {
+  if (!ref) return "variable";
+  if (ref.expr === "math") {
+    const spec = MATH.find((row) => row[0] === ref.op);
+    return spec ? spec[1] : "math";
+  }
+  if (ref.kind === "xyz") return "x y z";
+  const kindDef = KINDS[ref.kind];
+  if (!kindDef) return "variable";
+  const field = fieldDef(ref.kind, ref.field);
+  if (!field || !field.id) return kindDef.label;
+  return kindDef.label + " · " + field.label;
+}
 function scriptEvent(script) {
   const rec = scriptRecord(script);
   if (!rec) return null;
@@ -304,33 +391,106 @@ function scriptEvent(script) {
   if (script.kind === "service") return "service";
   return null;
 }
-function varFits(root, slot, script) {
-  const spec = varSpec(root);
-  if (!spec || spec[2].indexOf(slot) < 0) return false;
-  if (!script || script.kind === "loose") return false;
-  if (spec[4] && script.kind !== "hook") return false;
-  if (!spec[3]) return script.kind === "service" || script.kind === "hook" || script.kind === "feature";
-  if (script.kind === "service") return false;
+function hatVars(script) {
+  if (!script || script.kind === "loose") return [];
   const event = scriptEvent(script);
-  return !!event && spec[3].indexOf(event) >= 0;
+  const kinds = ["player", "event", "world"];
+  if (script.kind === "hook") kinds.push("item");
+  if (script.kind === "service") return kinds;
+  if (event === "onHit" || event === "onProjectileHit") kinds.push("attackedPlayer");
+  if (event === "onBlockUse") kinds.push("clickedBy");
+  if (event === "onChat") kinds.push("senderPlayer");
+  if (event === "onPlayerJoin") kinds.push("joinedPlayer");
+  if (event === "onPlayerLeave") kinds.push("leavingPlayer");
+  if (event === "onUse" || event === "onBlockUse" || event === "onBlockBreak" || event === "onBlockPlace" || event === "onProjectileHit") kinds.push("block");
+  if (event === "onProjectileHit") kinds.push("hit");
+  return kinds;
+}
+function sameScript(a, b) {
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === "hook") return a.itemId === b.itemId && a.hookId === b.hookId;
+  return a.id === b.id;
+}
+function isDescendant(stmt, id) {
+  return (stmt.then || []).some((child) => child.id === id || containsId(child, id));
+}
+function typeName(type) {
+  return { num: "number", str: "text", who: "player", pos: "position", bool: "true/false" }[type] || "value";
+}
+function refType(ref) {
+  if (!ref || typeof ref !== "object") return null;
+  if (ref.expr === "math") return "num";
+  if (ref.kind === "xyz") return "pos";
+  const field = fieldDef(ref.kind, ref.field);
+  if (!field) return null;
+  if (field.str) return "str";
+  if (field.bool) return "bool";
+  if (field.slots.indexOf("who") >= 0 && field.slots.indexOf("value") < 0 && field.slots.indexOf("pos") < 0) return "who";
+  if (field.slots.indexOf("pos") >= 0 && field.slots.indexOf("value") < 0) return "pos";
+  return "num";
+}
+function exprType(value) { return refType(value); }
+function accepts(slot, stmt) {
+  const path = String(slot || "");
+  const top = path.split(".")[0];
+  if (top === "who") return ["who"];
+  if (top === "pos" && path.indexOf(".") < 0) return ["pos"];
+  if (top === "cmp" || top === "value") return ["num", "str", "bool"];
+  if (top === "right") {
+    const type = stmt && exprType(stmt.cmp);
+    return type ? [type] : ["num", "str", "bool"];
+  }
+  return ["num"];
+}
+function typesMatch(value, slot, stmt) {
+  const type = exprType(value);
+  return !!type && accepts(slot, stmt).indexOf(type) >= 0;
+}
+function refFits(ref, slot, script, stmtId) {
+  if (!ref || !script) return false;
+  const located = stmtId ? locate(stmtId) : null;
+  const stmt = located && located.stmt;
+  if (!typesMatch(ref, slot, stmt)) return false;
+  if (script.kind === "loose") return false;
+  if (ref.expr === "math" || ref.kind === "xyz") return true;
+  if (!ref.producer || ref.producer === "hat") {
+    if (hatVars(script).indexOf(ref.kind) < 0) return false;
+    return fieldsFor(ref.kind, script).some((entry) => entry.id === (ref.field || ""));
+  }
+  const loc = locate(ref.producer);
+  if (!loc || loc.stmt.kind !== "rayIf" || !sameScript(loc.script, script)) return false;
+  const expect = loc.stmt.target === "block" ? "rayBlock" : "rayPlayer";
+  if (ref.kind !== expect) return false;
+  return !!stmtId && isDescendant(loc.stmt, stmtId);
+}
+function grayReason(ref, slot, script, stmtId) {
+  const located = stmtId ? locate(stmtId) : null;
+  if (ref && !typesMatch(ref, slot, located && located.stmt)) return "This slot needs a " + accepts(slot, located && located.stmt).map(typeName).join(" or ");
+  if (!script || script.kind === "loose") return "This block is not on a stack";
+  if (ref && ref.producer && ref.producer !== "hat") {
+    const loc = locate(ref.producer);
+    if (!loc) return "The block that read this is gone";
+    if (!sameScript(loc.script, script) || !stmtId || !isDescendant(loc.stmt, stmtId)) return "Use this inside the block that read it";
+  } else if (ref && ref.kind !== "xyz" && hatVars(script).indexOf(ref.kind) < 0) return "This hat does not read that variable";
+  return "Double-click and pick a part this block can use";
 }
 
 function fresh(kind) {
   const id = uid("s");
   if (kind === "playSound") return { id, kind, sound: "pickup" };
-  if (kind === "particle") return { id, kind, particle: "smoke", pos: { root: "player" } };
-  if (kind === "heal" || kind === "damage") return { id, kind, amount: "2", who: "player" };
-  if (kind === "velocity") return { id, kind, x: "0", y: "0.8", z: "0", who: "player" };
-  if (kind === "giveItem") return { id, kind, itemId: "120", count: "1", who: "player" };
-  if (kind === "setBlock") return { id, kind, blockId: "1", pos: { root: "block" } };
-  if (kind === "spawnDrop") return { id, kind, itemId: "120", count: "1", pos: { root: "player" } };
+  if (kind === "particle") return { id, kind, particle: "smoke", pos: null };
+  if (kind === "heal" || kind === "damage") return { id, kind, amount: "2", who: null };
+  if (kind === "velocity") return { id, kind, x: "0", y: "0.8", z: "0", who: null };
+  if (kind === "giveItem") return { id, kind, itemId: "120", count: "1", who: null };
+  if (kind === "setBlock") return { id, kind, blockId: "1", pos: null };
+  if (kind === "spawnDrop") return { id, kind, itemId: "120", count: "1", pos: null };
   if (kind === "setTime") return { id, kind, hours: "12" };
   if (kind === "launch") return { id, kind, speed: "18", lifetime: "4", damage: "3", aim: "look", yaw: "0", pitch: "0", dx: "0", dy: "0", dz: "1" };
   if (kind === "callService") return { id, kind, name: (model.services[0] && model.services[0].name) || "playPickup" };
   if (kind === "returnHit") return { id, kind, damage: "1.5", knockback: "1.2" };
-  if (kind === "rayIf") return { id, kind, target: "player", maxDistance: "12", then: [] };
+  if (kind === "rayIf") return { id, kind, target: "player", maxDistance: "12", rayField: "", then: [] };
   if (kind === "repeat") return { id, kind, times: "3", then: [] };
-  return { id, kind: "if", cmp: { root: "player", field: "health" }, op: "<", right: "10", then: [] };
+  return { id, kind: "if", cmp: null, op: "<", right: "10", then: [] };
 }
 
 function eachScript(fn) {
@@ -373,20 +533,18 @@ function containsId(stmt, id) {
   if (stmt.id === id) return true;
   return (stmt.then || []).some((child) => containsId(child, id));
 }
-function walkBody(body, id, fn) {
-  const next = [];
-  for (const stmt of body) {
-    if (stmt.id === id) { const r = fn(stmt); if (r) next.push(r); continue; }
-    next.push(isC(stmt) ? { ...stmt, then: walkBody(stmt.then, id, fn) } : stmt);
-  }
-  return next;
-}
 function updateStmt(id, fn) {
-  const walk = (body) => walkBody(body, id, fn);
-  model.services = model.services.map((s) => ({ ...s, body: walk(s.body) }));
-  model.features = model.features.map((f) => ({ ...f, body: walk(f.body) }));
-  model.items = model.items.map((item) => ({ ...item, hooks: item.hooks.map((h) => ({ ...h, body: walk(h.body) })) }));
-  model.loose = (model.loose || []).map((s) => ({ ...s, body: walk(s.body) }));
+  const edit = (body) => {
+    if (!body) return;
+    for (let i = body.length - 1; i >= 0; i--) {
+      if (body[i].id === id) {
+        const next = fn(body[i]);
+        if (next) body[i] = next;
+        else body.splice(i, 1);
+      } else if (isC(body[i]) && body[i].then) edit(body[i].then);
+    }
+  };
+  eachScript((body) => edit(body));
   pruneLoose();
 }
 function takeStmt(id) {
@@ -473,88 +631,192 @@ function ident(raw, fallback) {
   return cleaned && /^[A-Za-z_$]/.test(cleaned) ? cleaned : fallback;
 }
 function num(raw) { const n = Number(raw); return Number.isFinite(n) ? String(n) : "0"; }
-function refExpr(ref) {
-  if (!ref || !ref.root) return "undefined";
-  const root = rootMeta(ref.root).expr;
-  if (!ref.field) return root;
-  const parts = String(ref.field).split(".");
-  const checks = [root];
-  let access = root;
+function rayName(id) { return "_ray_" + String(id).replace(/[^\w$]/g, "_"); }
+function refBase(ref) {
+  if (ref.producer && ref.producer !== "hat") return rayName(ref.producer);
+  return (KINDS[ref.kind] || {}).expr || "undefined";
+}
+function chainExpr(base, path, empty) {
+  if (!path) return base;
+  const parts = String(path).split(".");
+  const checks = [base];
+  let access = base;
   for (let i = 0; i < parts.length - 1; i++) {
     access += "." + parts[i];
     checks.push(access);
   }
   access += "." + parts[parts.length - 1];
-  const empty = isStrRef(ref) ? "''" : "0";
   return "(" + checks.join(" && ") + " ? " + access + " : " + empty + ")";
 }
-function posExpr(pos) {
-  if (!pos || !pos.root || pos.root === "xyz") return [num(pos && pos.x), num(pos && pos.y), num(pos && pos.z)];
-  const root = rootMeta(pos.root).expr;
-  return ["x", "y", "z"].map((axis) =>
-    "(" + root + " && " + root + ".position ? " + root + ".position." + axis + " : 0)");
+function valueExpr(ref) {
+  const field = fieldDef(ref.kind, ref.field);
+  const empty = field && field.str ? "''" : field && field.bool ? "false" : "0";
+  const path = field && field.path != null ? field.path : (ref.field || "");
+  return chainExpr(refBase(ref), path, empty);
 }
-function whoExpr(who) { return who ? rootMeta(who).expr : "null"; }
-function directionExpr(stmt) {
+function numExpr(value, script, stmtId) {
+  if (value && typeof value === "object") {
+    if (value.expr === "math") return mathCode(value, script, stmtId);
+    if (exprType(value) !== "num" || !refFits(value, "num", script, stmtId)) return "0";
+    return valueExpr(value);
+  }
+  return num(value);
+}
+function mathCode(expr, script, stmtId) {
+  const a = numExpr(expr.a, script, stmtId);
+  const b = numExpr(expr.b, script, stmtId);
+  const op = expr.op;
+  if (op === "+") return "(" + a + " + " + b + ")";
+  if (op === "-") return "(" + a + " - " + b + ")";
+  if (op === "*") return "(" + a + " * " + b + ")";
+  if (op === "/") return "(" + a + " / " + b + ")";
+  if (op === "%") return "((" + b + ") === 0 ? 0 : (((" + a + ") % (" + b + ")) + (" + b + ")) % (" + b + "))";
+  if (op === "**") return "Math.pow(" + a + ", " + b + ")";
+  if (op === "min") return "Math.min(" + a + ", " + b + ")";
+  if (op === "max") return "Math.max(" + a + ", " + b + ")";
+  if (op === "abs") return "Math.abs(" + a + ")";
+  if (op === "round") return "Math.round(" + a + ")";
+  if (op === "floor") return "Math.floor(" + a + ")";
+  if (op === "ceil") return "Math.ceil(" + a + ")";
+  if (op === "sqrt") return "Math.sqrt(" + a + ")";
+  if (op === "sin") return "Math.sin((" + a + ") * Math.PI / 180)";
+  if (op === "cos") return "Math.cos((" + a + ") * Math.PI / 180)";
+  if (op === "tan") return "Math.tan((" + a + ") * Math.PI / 180)";
+  if (op === "random") return "(" + a + " + Math.random() * (" + b + " - " + a + "))";
+  return "0";
+}
+function scalarExpr(value, script, stmtId, type) {
+  if (value && typeof value === "object") {
+    if (exprType(value) !== type) return type === "str" ? "''" : type === "bool" ? "false" : "0";
+    if (type === "num") return numExpr(value, script, stmtId);
+    if (!refFits(value, "cmp", script, stmtId)) return type === "str" ? "''" : "false";
+    return valueExpr(value);
+  }
+  if (type === "str") return JSON.stringify(value == null ? "" : String(value));
+  if (type === "bool") return value === true || value === "true" ? "true" : "false";
+  return num(value);
+}
+function posExpr(pos, script, stmtId) {
+  if (!pos || pos.kind === "xyz") return ["x", "y", "z"].map((axis) => numExpr(pos && pos[axis], script, stmtId));
+  const field = fieldDef(pos.kind, pos.field) || {};
+  const path = field.posPath != null ? field.posPath : (field.path || "");
+  return ["x", "y", "z"].map((axis) => chainExpr(refBase(pos), path ? path + "." + axis : axis, "0"));
+}
+function whoExpr(ref) {
+  const field = fieldDef(ref.kind, ref.field) || {};
+  const path = field.path != null ? field.path : "";
+  if (!path) return refBase(ref);
+  const parts = path.split(".");
+  const checks = [refBase(ref)];
+  let access = refBase(ref);
+  for (let i = 0; i < parts.length - 1; i++) {
+    access += "." + parts[i];
+    checks.push(access);
+  }
+  access += "." + parts[parts.length - 1];
+  return "(" + checks.join(" && ") + " ? " + access + " : null)";
+}
+function directionExpr(stmt, script) {
   const aim = stmt.aim || "look";
-  if (aim === "vector") return ", direction: { x: " + num(stmt.dx) + ", y: " + num(stmt.dy) + ", z: " + num(stmt.dz) + " }";
+  if (aim === "vector") return ", direction: { x: " + numExpr(stmt.dx, script, stmt.id) + ", y: " + numExpr(stmt.dy, script, stmt.id) + ", z: " + numExpr(stmt.dz, script, stmt.id) + " }";
   if (aim === "angles") {
-    const yaw = (Number(stmt.yaw) || 0) * Math.PI / 180;
-    const pitch = (Number(stmt.pitch) || 0) * Math.PI / 180;
-    const round = (n) => String(Math.round(n * 1000) / 1000);
-    return ", direction: { x: " + round(-Math.sin(yaw) * Math.cos(pitch)) +
-      ", y: " + round(Math.sin(pitch)) +
-      ", z: " + round(-Math.cos(yaw) * Math.cos(pitch)) + " }";
+    const yaw = "(" + numExpr(stmt.yaw, script, stmt.id) + " * Math.PI / 180)";
+    const pitch = "(" + numExpr(stmt.pitch, script, stmt.id) + " * Math.PI / 180)";
+    return ", direction: { x: -Math.sin" + yaw + " * Math.cos" + pitch +
+      ", y: Math.sin" + pitch +
+      ", z: -Math.cos" + yaw + " * Math.cos" + pitch + " }";
   }
   return "";
 }
-function emitStmt(stmt, indent) {
+function slotGet(stmt, path) {
+  if (!stmt || !path) return null;
+  let cur = stmt;
+  for (const part of String(path).split(".")) {
+    if (cur == null || typeof cur !== "object") return null;
+    cur = cur[part === "value" ? "cmp" : part];
+  }
+  return cur;
+}
+function writePath(stmt, path, value) {
+  const parts = String(path).split(".");
+  const next = Object.assign({}, stmt);
+  let parent = next;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const key = parts[i] === "value" ? "cmp" : parts[i];
+    const child = parent[key];
+    parent[key] = child && typeof child === "object" ? Object.assign({}, child) : {};
+    parent = parent[key];
+  }
+  parent[parts[parts.length - 1] === "value" ? "cmp" : parts[parts.length - 1]] = value;
+  return next;
+}
+function setPath(id, path, value) {
+  updateStmt(id, (cur) => writePath(cur, path, value));
+  codeOnly();
+}
+function slotReady(stmt, slot, script) {
+  const ref = slotGet(stmt, slot);
+  if (!ref || typeof ref !== "object") return null;
+  return refFits(ref, slot, script, stmt.id) ? ref : false;
+}
+function emitStmt(stmt, indent, script) {
   const n = indent;
+  const child = (body) => (body || []).map((c) => emitStmt(c, indent + "  ", script)).join("");
   if (stmt.kind === "playSound") return n + "api.effects.playSound(" + JSON.stringify(stmt.sound) + ");\n";
   if (stmt.kind === "particle") {
-    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
-    const p = posExpr(stmt.pos);
+    const pos = slotReady(stmt, "pos", script);
+    if (!pos) return n + (pos === false ? "/* position variable is not available here */\n" : "/* drop a position variable */\n");
+    const p = posExpr(pos, script, stmt.id);
     return n + "api.effects.particle(" + JSON.stringify(stmt.particle) + ", " + p[0] + ", " + p[1] + ", " + p[2] + ");\n";
   }
   if (stmt.kind === "heal" || stmt.kind === "damage") {
     const api = stmt.kind === "heal" ? "heal" : "damage";
-    if (!stmt.who) return n + "/* drop a player variable */\n";
-    return n + "if (" + whoExpr(stmt.who) + ") api.player." + api + "(" + num(stmt.amount) + ");\n";
+    const who = slotReady(stmt, "who", script);
+    if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
+    return n + "if (" + whoExpr(who) + ") api.player." + api + "(" + numExpr(stmt.amount, script, stmt.id) + ");\n";
   }
   if (stmt.kind === "velocity") {
-    if (!stmt.who) return n + "/* drop a player variable */\n";
-    return n + "if (" + whoExpr(stmt.who) + ") api.player.addVelocity(" + num(stmt.x) + ", " + num(stmt.y) + ", " + num(stmt.z) + ");\n";
+    const who = slotReady(stmt, "who", script);
+    if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
+    return n + "if (" + whoExpr(who) + ") api.player.addVelocity(" + numExpr(stmt.x, script, stmt.id) + ", " + numExpr(stmt.y, script, stmt.id) + ", " + numExpr(stmt.z, script, stmt.id) + ");\n";
   }
   if (stmt.kind === "giveItem") {
-    if (!stmt.who) return n + "/* drop a player variable */\n";
-    return n + "if (" + whoExpr(stmt.who) + ") api.inventory.giveItem(" + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
+    const who = slotReady(stmt, "who", script);
+    if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
+    return n + "if (" + whoExpr(who) + ") api.inventory.giveItem(" + numExpr(stmt.itemId, script, stmt.id) + ", " + numExpr(stmt.count, script, stmt.id) + ");\n";
   }
   if (stmt.kind === "setBlock") {
-    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
-    const p = posExpr(stmt.pos);
-    return n + "api.world.setBlock(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + num(stmt.blockId) + ");\n";
+    const pos = slotReady(stmt, "pos", script);
+    if (!pos) return n + (pos === false ? "/* position variable is not available here */\n" : "/* drop a position variable */\n");
+    const p = posExpr(pos, script, stmt.id);
+    return n + "api.world.setBlock(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + numExpr(stmt.blockId, script, stmt.id) + ");\n";
   }
   if (stmt.kind === "spawnDrop") {
-    if (!stmt.pos || !stmt.pos.root) return n + "/* drop a position variable */\n";
-    const p = posExpr(stmt.pos);
-    return n + "api.world.spawnDrop(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + num(stmt.itemId) + ", " + num(stmt.count) + ");\n";
+    const pos = slotReady(stmt, "pos", script);
+    if (!pos) return n + (pos === false ? "/* position variable is not available here */\n" : "/* drop a position variable */\n");
+    const p = posExpr(pos, script, stmt.id);
+    return n + "api.world.spawnDrop(" + p[0] + ", " + p[1] + ", " + p[2] + ", " + numExpr(stmt.itemId, script, stmt.id) + ", " + numExpr(stmt.count, script, stmt.id) + ");\n";
   }
-  if (stmt.kind === "setTime") return n + "api.world.setTime(" + num(stmt.hours) + ");\n";
-  if (stmt.kind === "launch") return n + "api.projectiles.launch({ speed: " + num(stmt.speed) + ", lifetime: " + num(stmt.lifetime) + ", damage: " + num(stmt.damage) + directionExpr(stmt) + " });\n";
+  if (stmt.kind === "setTime") return n + "api.world.setTime(" + numExpr(stmt.hours, script, stmt.id) + ");\n";
+  if (stmt.kind === "launch") return n + "api.projectiles.launch({ speed: " + numExpr(stmt.speed, script, stmt.id) + ", lifetime: " + numExpr(stmt.lifetime, script, stmt.id) + ", damage: " + numExpr(stmt.damage, script, stmt.id) + directionExpr(stmt, script) + " });\n";
   if (stmt.kind === "callService") return n + "api.services." + ident(stmt.name, "playPickup") + "();\n";
-  if (stmt.kind === "returnHit") return n + "return api.combat.modifyHit(" + num(stmt.damage) + ", " + num(stmt.knockback) + ");\n";
+  if (stmt.kind === "returnHit") return n + "return api.combat.modifyHit(" + numExpr(stmt.damage, script, stmt.id) + ", " + numExpr(stmt.knockback, script, stmt.id) + ");\n";
   if (isC(stmt)) {
     let head = "";
-    if (stmt.kind === "repeat") head = "for (let _r" + stmt.id + " = 0; _r" + stmt.id + " < " + num(stmt.times) + "; _r" + stmt.id + "++)";
+    let before = "";
+    if (stmt.kind === "repeat") head = "for (let _r" + stmt.id + " = 0; _r" + stmt.id + " < " + numExpr(stmt.times, script, stmt.id) + "; _r" + stmt.id + "++)";
     else if (stmt.kind === "rayIf") {
       const typ = stmt.target === "block" ? "block" : "player";
-      head = "if (((game.services.rayTrace(" + num(stmt.maxDistance) + ", 1)[0] || {}).type === " + JSON.stringify(typ) + "))";
-    } else if (!stmt.cmp || !stmt.cmp.root) head = "if (false)";
-    else {
-      const right = isStrRef(stmt.cmp) ? JSON.stringify(stmt.right) : num(stmt.right);
-      head = "if (" + refExpr(stmt.cmp) + " " + (stmt.op || "===") + " " + right + ")";
+      const name = rayName(stmt.id);
+      before = n + "const " + name + " = (game.services.rayTrace(" + numExpr(stmt.maxDistance, script, stmt.id) + ", 1)[0] || null);\n";
+      head = "if (" + name + " && " + name + ".type === " + JSON.stringify(typ) + ")";
+    } else {
+      const cmp = slotReady(stmt, "cmp", script);
+      const cmpType = exprType(cmp);
+      if (!cmp || !cmpType) head = "if (false)";
+      else head = "if (" + scalarExpr(cmp, script, stmt.id, cmpType) + " " + (stmt.op || "===") + " " + scalarExpr(stmt.right, script, stmt.id, cmpType) + ")";
     }
-    return n + head + " {\n" + (stmt.then || []).map((c) => emitStmt(c, indent + "  ")).join("") + n + "}\n";
+    return before + n + head + " {\n" + child(stmt.then) + n + "}\n";
   }
   return "";
 }
@@ -572,21 +834,21 @@ function emitPrelude(indent) {
     indent + "      : null);"
   ].join("\n") + "\n";
 }
-function emitFn(body, indent) {
-  return emitPrelude(indent) + body.map((b) => emitStmt(b, indent)).join("");
+function emitFn(body, indent, script) {
+  return emitPrelude(indent) + body.map((b) => emitStmt(b, indent, script)).join("");
 }
 function generate() {
   const services = model.services.map((s) =>
     "    " + ident(s.name, "service") + "(game, api, event) {\n" +
-    emitFn(s.body, "      ") + "    }").join(",\n");
+    emitFn(s.body, "      ", { kind: "service", id: s.id }) + "    }").join(",\n");
   const items = model.items.map((item) =>
     "    " + ident(item.key, "item") + ": {\n" +
     item.hooks.map((h) => "      " + h.name + "(game, api, event) {\n" +
-      emitFn(h.body, "        ") + "      }").join(",\n") +
+      emitFn(h.body, "        ", { kind: "hook", itemId: item.id, hookId: h.id }) + "      }").join(",\n") +
     "\n    }").join(",\n");
   const features = model.features.map((f) =>
     "    // " + (f.event || "onChat") + "\n    " + ident(f.name, "feature") + "(game, api, event) {\n" +
-    emitFn(f.body, "      ") + "    }").join(",\n");
+    emitFn(f.body, "      ", { kind: "feature", id: f.id }) + "    }").join(",\n");
   return "({\n  services: {\n" + services + "\n  },\n  items: {\n" + items + "\n  },\n  features: {\n" + features + "\n  }\n})";
 }
 
@@ -597,17 +859,32 @@ function snapshot() {
 function persist() {
   try { localStorage.setItem(STORE, JSON.stringify({ seq, model })); } catch (e) {}
 }
+function asRef(value, slot) {
+  if (!value) return null;
+  if (typeof value === "string") return { producer: "hat", kind: value, field: slot === "pos" ? "position" : "" };
+  if (value.kind) return value;
+  if (!value.root) return null;
+  if (value.root === "xyz") return { kind: "xyz", x: value.x == null ? "0" : value.x, y: value.y == null ? "0" : value.y, z: value.z == null ? "0" : value.z };
+  let field = value.field || "";
+  if (slot === "pos" && !field) field = "position";
+  if (slot === "who") field = "";
+  return { producer: "hat", kind: value.root, field, x: value.x, y: value.y, z: value.z };
+}
 function migrateStmt(stmt) {
   if (!stmt) return;
   (stmt.then || []).forEach(migrateStmt);
+  if (stmt.kind === "launch" && !stmt.aim) stmt.aim = "look";
+  if (stmt.kind === "rayIf" && stmt.rayField == null) stmt.rayField = "";
   if (stmt.at && !stmt.pos) {
-    if (stmt.at === "xyz") stmt.pos = { root: "xyz", x: stmt.x, y: stmt.y, z: stmt.z };
-    else if (stmt.at === "hit") stmt.pos = { root: "event" };
-    else stmt.pos = { root: "player" };
+    if (stmt.at === "xyz") stmt.pos = { kind: "xyz", x: stmt.x, y: stmt.y, z: stmt.z };
+    else if (stmt.at === "hit") stmt.pos = { producer: "hat", kind: "event", field: "position" };
+    else stmt.pos = { producer: "hat", kind: "player", field: "position" };
+    delete stmt.at;
   }
-  if ((stmt.kind === "setBlock" || stmt.kind === "spawnDrop") && !stmt.pos) {
-    stmt.pos = { root: "xyz", x: stmt.x, y: stmt.y, z: stmt.z };
-  }
+  if (stmt.pos) stmt.pos = asRef(stmt.pos, "pos");
+  if (stmt.pos && stmt.pos.kind && stmt.pos.kind !== "xyz" && !stmt.pos.field && refType(stmt.pos) !== "pos") stmt.pos.field = "position";
+  if (stmt.cmp) stmt.cmp = asRef(stmt.cmp, "value");
+  if (stmt.who) stmt.who = asRef(stmt.who, "who");
   if (stmt.kind === "if" && stmt.source && !stmt.cmp) {
     const map = {
       message: ["event", "message"], sender: ["event", "sender"], eventType: ["event", "type"],
@@ -615,10 +892,7 @@ function migrateStmt(stmt) {
       px: ["player", "position.x"], py: ["player", "position.y"], pz: ["player", "position.z"]
     };
     const m = map[stmt.source] || ["event", "type"];
-    stmt.cmp = { root: m[0], field: m[1] };
-  }
-  if ((stmt.kind === "heal" || stmt.kind === "damage" || stmt.kind === "velocity" || stmt.kind === "giveItem") && !stmt.who) {
-    stmt.who = "player";
+    stmt.cmp = { producer: "hat", kind: m[0], field: m[1] };
   }
 }
 function migrate() {
@@ -689,6 +963,7 @@ function markDrop(node, dest) {
   }
   if (dest.id) node.dataset.id = dest.id;
   if (dest.slot) node.dataset.slot = dest.slot;
+  if (dest.type) node.dataset.type = dest.type;
   return node;
 }
 function destFromNode(node) {
@@ -700,12 +975,24 @@ function destFromNode(node) {
   } else if (node.dataset.scriptKind) dest.script = { kind: node.dataset.scriptKind, id: node.dataset.scriptId };
   if (node.dataset.id) dest.id = node.dataset.id;
   if (node.dataset.slot) dest.slot = node.dataset.slot;
+  if (node.dataset.type) dest.type = node.dataset.type;
   return dest;
+}
+function wouldCycle(fromSlot, destSlot) {
+  if (!fromSlot || !destSlot) return false;
+  return destSlot === fromSlot || destSlot.indexOf(fromSlot + ".") === 0;
 }
 function canDropOn(dest) {
   if (!drag || !dest) return false;
   if (dest.place === "trash") return drag.type === "stmt" || drag.type === "script" || drag.type === "var";
-  if (drag.type === "var") return dest.place === "socket";
+  if (drag.type === "var") {
+    if (dest.place !== "socket") return false;
+    const accept = (dest.type || "").split(",");
+    const type = exprType(drag.value);
+    if (!type || accept.indexOf(type) < 0) return false;
+    if (drag.fromId && dest.id === drag.fromId && wouldCycle(drag.fromSlot, dest.slot)) return false;
+    return true;
+  }
   if (drag.type === "hat" || drag.type === "script") return dest.place === "workspace" || dest.place === "trash";
   if (dest.place === "socket") return false;
   return dest.place !== "workspace" && dest.place !== "trash" && !!dest.script;
@@ -766,6 +1053,10 @@ function highlightAt(x, y) {
     if (node && canDropOn(destFromNode(node))) node.classList.add("drop-on");
     return;
   }
+  if (drag.type === "var") {
+    const aimed = nearbySocket(x, y);
+    if (aimed && !canDropOn(aimed)) return;
+  }
   const snap = nearestSnap(x, y);
   if (snap) snap.node.classList.add("drop-on");
 }
@@ -783,7 +1074,7 @@ function finishDrop(ev) {
     dropTrash();
     return;
   }
-  if (drag.type === "var") { dropVar(nearestSnap(ev.clientX, ev.clientY)); return; }
+  if (drag.type === "var") { dropVar(nearestSnap(ev.clientX, ev.clientY), ev); return; }
   if (drag.type === "script") {
     setScriptPos(drag.script, drag.liveX, drag.liveY);
     persist();
@@ -804,15 +1095,18 @@ function finishDrop(ev) {
 function bindDrag(node, payload, stop) {
   node.addEventListener("pointerdown", (e) => {
     if (e.button && e.button !== 0) return;
-    if (e.target.closest("input, select, button")) return;
+    if (e.target.closest("input, select, button, .var-menu")) {
+      if (stop) e.stopPropagation();
+      return;
+    }
     if (stop) e.stopPropagation();
     const origin = node;
     const box = origin.getBoundingClientRect();
     let live = payload;
     if (payload.type === "var" && payload.fromId) {
       const found = locate(payload.fromId);
-      const slotValueNow = found && readSlot(found.stmt, payload.fromSlot);
-      if (slotValueNow) live = Object.assign({}, payload, { value: { root: slotValueNow.root, field: slotValueNow.field, x: slotValueNow.x, y: slotValueNow.y, z: slotValueNow.z } });
+      const slotValueNow = found && slotGet(found.stmt, payload.fromSlot);
+      if (slotValueNow && typeof slotValueNow === "object") live = Object.assign({}, payload, { value: copyExpr(slotValueNow) });
     }
     drag = Object.assign({
       moved: false, startX: e.clientX, startY: e.clientY, ghost: null, origin,
@@ -916,53 +1210,70 @@ function dropLoose(pos) {
   document.body.dataset.panel = "stacks";
   render();
 }
-function readSlot(stmt, slot) {
-  if (slot === "who") return stmt.who ? { root: stmt.who } : null;
-  if (slot === "pos") return stmt.pos && stmt.pos.root ? stmt.pos : null;
-  if (slot === "value") return stmt.cmp && stmt.cmp.root ? stmt.cmp : null;
-  return null;
+function copyExpr(value) {
+  if (value == null || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value));
 }
-function writeSlot(stmt, slot, value) {
-  if (slot === "who") return { ...stmt, who: value ? value.root : "" };
-  if (slot === "pos") return { ...stmt, pos: value };
-  if (slot === "value") return { ...stmt, cmp: value ? { root: value.root, field: value.field || defaultField(value.root) } : null };
-  return stmt;
+function emptySlot(path) {
+  const top = String(path || "").split(".")[0];
+  if (top === "who" || top === "pos" || top === "cmp" || top === "value") return null;
+  if (top === "right") return "";
+  return "0";
 }
-function slotValue(raw, slot) {
-  const value = { root: raw.root, field: raw.field, x: raw.x, y: raw.y, z: raw.z };
-  if (slot === "value" && value.root !== "xyz" && !value.field) value.field = defaultField(value.root);
-  if (slot === "pos" && value.root === "xyz") {
-    value.x = value.x == null ? "0" : value.x;
-    value.y = value.y == null ? "0" : value.y;
-    value.z = value.z == null ? "0" : value.z;
-  }
-  return value;
+function freshMath(op) {
+  const spec = MATH.find((row) => row[0] === op) || ["+", "+", 2];
+  const expr = { expr: "math", op, a: "0" };
+  if (spec[2] > 1) expr.b = op === "random" ? "10" : "0";
+  return expr;
 }
-function dropVar(snap) {
+function nearbySocket(x, y) {
+  const hit = document.elementFromPoint(x, y);
+  const direct = hit && hit.closest("[data-place='socket']");
+  if (direct) return destFromNode(direct);
+  let best = null;
+  let bestDist = SNAP_LIMIT;
+  document.querySelectorAll("[data-place='socket']").forEach((node) => {
+    const dist = pointDist(node.getBoundingClientRect(), x, y);
+    if (dist < bestDist) { bestDist = dist; best = destFromNode(node); }
+  });
+  return best;
+}
+function dropVar(snap, ev) {
   if (!drag || drag.type !== "var") return;
-  if (!snap || snap.dest.place !== "socket") {
-    if (!drag.fromId) { note("Drop the variable into a round slot."); return; }
+  const type = exprType(drag.value);
+  const aimed = ev && nearbySocket(ev.clientX, ev.clientY);
+  if (aimed && !canDropOn(aimed)) {
+    note(type ? "That is a " + typeName(type) + ". Drop it on a " + typeName(type) + " slot." : "Drop this into a matching slot.");
+    return;
+  }
+  if (!snap || !canDropOn(snap.dest)) {
+    const near = ev && nearbySocket(ev.clientX, ev.clientY);
+    if (!drag.fromId || near) {
+      note(type ? "That is a " + typeName(type) + ". Drop it on a " + typeName(type) + " slot." : "Drop this into a matching slot.");
+      return;
+    }
     snapshot();
-    updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
-    note("Removed the variable.");
+    updateStmt(drag.fromId, (stmt) => writePath(stmt, drag.fromSlot, emptySlot(drag.fromSlot)));
+    note("Removed the value.");
     render();
     return;
   }
   const dest = snap.dest;
-  const value = slotValue(drag.value, dest.slot);
+  const value = copyExpr(drag.value);
+  if (!value || typeof value !== "object") return;
   if (drag.fromId === dest.id && drag.fromSlot === dest.slot) return;
   snapshot();
-  if (drag.fromId) updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
-  updateStmt(dest.id, (stmt) => writeSlot(stmt, dest.slot, value));
-  note(varFits(value.root, dest.slot, dest.script) ? "Passed " + varLabel(value.root) + " into the block." : "That variable is gray because this block cannot use it.");
+  if (drag.fromId) updateStmt(drag.fromId, (stmt) => writePath(stmt, drag.fromSlot, emptySlot(drag.fromSlot)));
+  updateStmt(dest.id, (stmt) => writePath(stmt, dest.slot, value));
+  note(refFits(value, dest.slot, dest.script, dest.id) ? "Passed " + refLabel(value) + "." : grayReason(value, dest.slot, dest.script, dest.id));
   render();
 }
 function dropTrash() {
   if (!drag) return;
   if (drag.type === "var") {
-    if (!drag.fromId) { note("Palette variables stay in the list."); return; }
+    if (!drag.fromId) { note("That variable stays on the block that reads it."); return; }
     snapshot();
-    updateStmt(drag.fromId, (stmt) => writeSlot(stmt, drag.fromSlot, null));
+    updateStmt(drag.fromId, (stmt) => writePath(stmt, drag.fromSlot, emptySlot(drag.fromSlot)));
     note("Removed the variable.");
     render();
     return;
@@ -1020,64 +1331,162 @@ function dropHat(payload, pos, onto) {
 }
 
 function setFields(id, patch) {
-  updateStmt(id, (cur) => ({ ...cur, ...patch }));
+  updateStmt(id, (cur) => Object.assign(cur, patch));
   codeOnly();
-  persist();
 }
+function closeVarMenu() {
+  if (varMenu) { varMenu.remove(); varMenu = null; }
+}
+function openVarMenu(anchor, fields, current, onPick) {
+  closeVarMenu();
+  const box = el("div", { class: "var-menu" });
+  fields.forEach((field) => {
+    box.append(el("button", { type: "button", class: field.id === (current || "") ? "on" : "", onclick: (e) => {
+      e.stopPropagation();
+      onPick(field.id);
+      closeVarMenu();
+    } }, [field.label]));
+  });
+  document.body.append(box);
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 200));
+  box.style.left = left + "px";
+  box.style.top = (rect.bottom + 6) + "px";
+  if (rect.bottom + 6 + box.offsetHeight > window.innerHeight) box.style.top = Math.max(8, rect.top - box.offsetHeight - 6) + "px";
+  varMenu = box;
+}
+function shownField(kind, picked, script) {
+  const fields = fieldsFor(kind, script);
+  if (picked && fields.some((field) => field.id === picked)) return picked;
+  if (fields.some((field) => field.id === "")) return "";
+  return (fields[0] || { id: "" }).id;
+}
+function sourceChip(kind, field, onField, producer, script) {
+  const ref = { kind, field: field || "" };
+  const chip = el("span", {
+    class: "reporter",
+    title: "Drag into a round slot. Double-click for position, health, and other parts."
+  }, [refLabel(ref)]);
+  chip.addEventListener("dblclick", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const kindDef = KINDS[kind];
+    if (!kindDef) return;
+    openVarMenu(chip, fieldsFor(kind, script), field || "", onField);
+  });
+  return bindDrag(chip, { type: "var", value: { producer, kind, field: field || "" } }, true);
+}
+function hatChips(script, rec) {
+  const picks = rec.picks || {};
+  return hatVars(script).map((kind) => {
+    const field = shownField(kind, picks[kind] || "", script);
+    return sourceChip(kind, field, (next) => {
+      const live = scriptRecord(script);
+      if (!live) return;
+      live.picks = Object.assign({}, live.picks, { [kind]: next });
+      render();
+    }, "hat", script);
+  });
+}
+function numSocket(stmt, path, script) { return exprSocket(stmt, path, script, ["num"]); }
 function reporterChip(value, slot, script, stmtId) {
-  const bad = !varFits(value.root, slot, script);
+  const bad = !refFits(value, slot, script, stmtId);
   const chip = el("span", {
     class: "reporter" + (bad ? " bad" : ""),
-    title: bad ? "This variable does not belong on this block" : ""
-  }, [varLabel(value.root)]);
-  if (slot === "value" && value.root !== "xyz") {
-    const field = value.field || defaultField(value.root);
-    chip.append(menu(field, fieldsOf(value.root), (next) => setFields(stmtId, { cmp: { root: value.root, field: next } })));
+    title: bad ? grayReason(value, slot, script, stmtId) : "Double-click for parts this slot can use"
+  }, [refLabel(value)]);
+  const found = locate(stmtId);
+  const stmt = found && found.stmt;
+  if (value.kind === "xyz" && stmt) {
+    chip.append(exprSocket(stmt, slot + ".x", script, ["num"]), exprSocket(stmt, slot + ".y", script, ["num"]), exprSocket(stmt, slot + ".z", script, ["num"]));
+  } else if (KINDS[value.kind]) {
+    chip.addEventListener("dblclick", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const allowed = accepts(slot, stmt);
+      const fields = fieldsFor(value.kind, script).filter((field) => {
+        const next = Object.assign({}, value, { field: field.id });
+        return allowed.indexOf(refType(next)) >= 0;
+      });
+      openVarMenu(chip, fields, value.field || "", (next) => {
+        const live = locate(stmtId);
+        const current = live && slotGet(live.stmt, slot);
+        if (!current || typeof current !== "object") return;
+        snapshot();
+        updateStmt(stmtId, (cur) => writePath(cur, slot, Object.assign({}, current, { field: next })));
+        render();
+      });
+    });
   }
-  if (slot === "pos" && value.root === "xyz") {
-    const axis = (key) => (raw) => {
-      const found = locate(stmtId);
-      const pos = (found && found.stmt.pos) || { root: "xyz", x: "0", y: "0", z: "0" };
-      setFields(stmtId, { pos: { ...pos, root: "xyz", [key]: raw } });
-    };
-    chip.append(bubble(value.x || "0", axis("x")), bubble(value.y || "0", axis("y")), bubble(value.z || "0", axis("z")));
+  return bindDrag(chip, { type: "var", value: copyExpr(value), fromId: stmtId, fromSlot: slot }, true);
+}
+function mathChip(expr, path, script, stmtId) {
+  const spec = MATH.find((row) => row[0] === expr.op) || ["+", "+", 2, "infix"];
+  const bad = !refFits(expr, path, script, stmtId);
+  const chip = el("span", {
+    class: "reporter math" + (bad ? " bad" : ""),
+    title: bad ? grayReason(expr, path, script, stmtId) : "Number"
+  });
+  const found = locate(stmtId);
+  const stmt = found && found.stmt;
+  const a = stmt ? exprSocket(stmt, path + ".a", script, ["num"]) : el("span");
+  const b = spec[2] > 1 && stmt ? exprSocket(stmt, path + ".b", script, ["num"]) : null;
+  if (spec[3] === "prefix") {
+    chip.append(spec[1], a);
+    if (b) chip.append(b);
+    if (expr.op === "sin" || expr.op === "cos" || expr.op === "tan") chip.append("°");
+  } else if (spec[3] === "random") chip.append("random", a, "to", b);
+  else chip.append(a, spec[1], b);
+  return bindDrag(chip, { type: "var", value: copyExpr(expr), fromId: stmtId, fromSlot: path }, true);
+}
+function exprChip(value, path, script, stmtId) {
+  if (value && value.expr === "math") return mathChip(value, path, script, stmtId);
+  return reporterChip(value, path, script, stmtId);
+}
+function exprSocket(stmt, path, script, types) {
+  const list = types && types.length ? types : ["num"];
+  const node = bindDrop(el("span", { class: "socket t-" + list[0] }), { place: "socket", slot: path, id: stmt.id, script, type: list.join(",") });
+  const value = slotGet(stmt, path);
+  if (value && typeof value === "object") node.append(exprChip(value, path, script, stmt.id));
+  else if (list.length === 1 && list[0] === "num") node.append(bubble(value == null || value === "" ? "0" : value, (raw) => setPath(stmt.id, path, raw)));
+  else if (list.length === 1 && list[0] === "str") node.append(bubble(value == null ? "" : value, (raw) => setPath(stmt.id, path, raw), "cmp"));
+  else if (list.length === 1 && list[0] === "bool") node.append(menu(value === true || value === "true" ? "true" : "false", [["true", "true"], ["false", "false"]], (raw) => { setPath(stmt.id, path, raw); render(); }));
+  else if (path === "pos") {
+    node.append(el("button", { class: "mini", type: "button", title: "Type x y z", onclick: (e) => {
+      e.stopPropagation();
+      snapshot();
+      setFields(stmt.id, { pos: { kind: "xyz", x: "0", y: "0", z: "0" } });
+      render();
+    } }, ["123"]));
   }
-  return bindDrag(chip, {
-    type: "var",
-    value: { root: value.root, field: value.field, x: value.x, y: value.y, z: value.z },
-    fromId: stmtId,
-    fromSlot: slot
-  }, true);
+  return node;
 }
 function socketNode(stmt, slot, script) {
-  const node = bindDrop(el("span", { class: "socket" }), { place: "socket", slot, id: stmt.id, script });
-  const value = readSlot(stmt, slot);
-  if (value) node.append(reporterChip(value, slot, script, stmt.id));
-  return node;
+  return exprSocket(stmt, slot, script, accepts(slot, stmt));
 }
 function paintFields(stmt, row, script) {
   if (stmt.kind === "playSound") row.append("play sound", menu(stmt.sound, SOUNDS, (sound) => setFields(stmt.id, { sound })));
   if (stmt.kind === "particle") row.append("particle", menu(stmt.particle, PARTICLES, (particle) => setFields(stmt.id, { particle })), "at", socketNode(stmt, "pos", script));
-  if (stmt.kind === "heal") row.append("heal", socketNode(stmt, "who", script), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
-  if (stmt.kind === "damage") row.append("damage", socketNode(stmt, "who", script), "by", bubble(stmt.amount, (amount) => setFields(stmt.id, { amount })));
-  if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", bubble(stmt.x, (x) => setFields(stmt.id, { x })), "y", bubble(stmt.y, (y) => setFields(stmt.id, { y })), "z", bubble(stmt.z, (z) => setFields(stmt.id, { z })));
-  if (stmt.kind === "giveItem") row.append("give", socketNode(stmt, "who", script), "id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })));
-  if (stmt.kind === "setBlock") row.append("set block", bubble(stmt.blockId, (blockId) => setFields(stmt.id, { blockId })), "at", socketNode(stmt, "pos", script));
-  if (stmt.kind === "spawnDrop") row.append("drop id", bubble(stmt.itemId, (itemId) => setFields(stmt.id, { itemId })), "×", bubble(stmt.count, (count) => setFields(stmt.id, { count })), "at", socketNode(stmt, "pos", script));
-  if (stmt.kind === "setTime") row.append("set time to", bubble(stmt.hours, (hours) => setFields(stmt.id, { hours })), "hours");
+  if (stmt.kind === "heal") row.append("heal", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
+  if (stmt.kind === "damage") row.append("damage", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
+  if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", numSocket(stmt, "x", script), "y", numSocket(stmt, "y", script), "z", numSocket(stmt, "z", script));
+  if (stmt.kind === "giveItem") row.append("give", socketNode(stmt, "who", script), "id", numSocket(stmt, "itemId", script), "×", numSocket(stmt, "count", script));
+  if (stmt.kind === "setBlock") row.append("set block", numSocket(stmt, "blockId", script), "at", socketNode(stmt, "pos", script));
+  if (stmt.kind === "spawnDrop") row.append("drop id", numSocket(stmt, "itemId", script), "×", numSocket(stmt, "count", script), "at", socketNode(stmt, "pos", script));
+  if (stmt.kind === "setTime") row.append("set time to", numSocket(stmt, "hours", script), "hours");
   if (stmt.kind === "launch") {
     const aim = stmt.aim || "look";
-    row.append("launch speed", bubble(stmt.speed, (speed) => setFields(stmt.id, { speed })), "life", bubble(stmt.lifetime, (lifetime) => setFields(stmt.id, { lifetime })), "dmg", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })),
+    row.append("launch speed", numSocket(stmt, "speed", script), "life", numSocket(stmt, "lifetime", script), "dmg", numSocket(stmt, "damage", script),
       "aim", menu(aim, AIM_MODES, (next) => { setFields(stmt.id, { aim: next }); render(); }));
-    if (aim === "angles") row.append("yaw", bubble(stmt.yaw || "0", (yaw) => setFields(stmt.id, { yaw })), "°", "pitch", bubble(stmt.pitch || "0", (pitch) => setFields(stmt.id, { pitch })), "°");
-    if (aim === "vector") row.append("x", bubble(stmt.dx || "0", (dx) => setFields(stmt.id, { dx })), "y", bubble(stmt.dy || "0", (dy) => setFields(stmt.id, { dy })), "z", bubble(stmt.dz || "1", (dz) => setFields(stmt.id, { dz })));
+    if (aim === "angles") row.append("yaw", numSocket(stmt, "yaw", script), "°", "pitch", numSocket(stmt, "pitch", script), "°");
+    if (aim === "vector") row.append("x", numSocket(stmt, "dx", script), "y", numSocket(stmt, "dy", script), "z", numSocket(stmt, "dz", script));
   }
   if (stmt.kind === "callService") {
     const names = model.services.map((s) => s.name);
     if (stmt.name && !names.includes(stmt.name)) names.unshift(stmt.name);
     row.append("call", names.length ? menu(stmt.name, names, (name) => setFields(stmt.id, { name })) : bubble(stmt.name, (name) => setFields(stmt.id, { name }), true));
   }
-  if (stmt.kind === "returnHit") row.append("hit damage ×", bubble(stmt.damage, (damage) => setFields(stmt.id, { damage })), "knockback ×", bubble(stmt.knockback, (knockback) => setFields(stmt.id, { knockback })));
+  if (stmt.kind === "returnHit") row.append("hit damage ×", numSocket(stmt, "damage", script), "knockback ×", numSocket(stmt, "knockback", script));
 }
 function stmtNode(stmt, script, depth) {
   const color = actionColor(stmt.kind);
@@ -1088,13 +1497,16 @@ function stmtNode(stmt, script, depth) {
     bindDrop(row, after);
     const head = el("div", { class: "sb-head" });
     if (stmt.kind === "if") {
-      head.append("if", socketNode(stmt, "value", script),
+      head.append("if", exprSocket(stmt, "cmp", script, accepts("cmp", stmt)),
         menu(stmt.op || "===", OPS, (op) => setFields(stmt.id, { op })),
-        bubble(stmt.right, (right) => setFields(stmt.id, { right }), "cmp"), "then");
+        exprSocket(stmt, "right", script, accepts("right", stmt)), "then");
     } else if (stmt.kind === "rayIf") {
-      head.append("if looking at", menu(stmt.target, [["player", "player"], ["block", "block"]], (targetType) => setFields(stmt.id, { target: targetType })),
-        "within", bubble(stmt.maxDistance, (maxDistance) => setFields(stmt.id, { maxDistance })), "blocks");
-    } else head.append("repeat", bubble(stmt.times, (times) => setFields(stmt.id, { times })), "times");
+      const rayKind = stmt.target === "block" ? "rayBlock" : "rayPlayer";
+      const rayField = shownField(rayKind, stmt.rayField || "", script);
+      head.append("if looking at", menu(stmt.target, [["player", "player"], ["block", "block"]], (targetType) => { setFields(stmt.id, { target: targetType, rayField: "" }); render(); }),
+        "within", numSocket(stmt, "maxDistance", script), "blocks", "connected",
+        sourceChip(rayKind, rayField, (next) => { setFields(stmt.id, { rayField: next }); render(); }, stmt.id, script));
+    } else head.append("repeat", numSocket(stmt, "times", script), "times");
     head.append(xbtn(() => { takeStmt(stmt.id); }));
     row.append(head);
     const mouth = bindDrop(el("div", { class: "sb-mouth" }), { script, place: "into", id: stmt.id });
@@ -1131,12 +1543,16 @@ function paletteStack(action) {
     if (!didDrag) placeNew(action[0], spawnPos());
   } }, [action[1]]), { type: "palette", kind: action[0] });
 }
-function paletteVar(entry) {
-  return bindDrag(el("div", { class: "reporter", role: "button" }, [entry[1]]), { type: "var", value: { root: entry[0] } });
+function paletteMath(row) {
+  return bindDrag(el("span", {
+    class: "reporter math", role: "button", title: "Drop into a number slot",
+    onclick: () => { if (!didDrag) note("Drop this into a number slot."); }
+  }, [row[1]]), { type: "var", value: freshMath(row[0]) });
 }
-
 function render() {
+  closeVarMenu();
   migrate();
+  if (!CATS.some(([id]) => id === cat)) cat = "events";
   document.body.dataset.panel = document.body.dataset.panel || "stacks";
   const cats = document.getElementById("cats");
   cats.replaceChildren(...CATS.map(([id, labelText, color]) => el("button", {
@@ -1144,31 +1560,58 @@ function render() {
     onclick: () => { cat = id; document.body.dataset.panel = "palette"; document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("on", b.dataset.panel === "palette")); render(); }
   }, [labelText])));
   const fly = document.getElementById("fly");
-  const bits = [el("p", { class: "hint" }, [cat === "vars" ? "Drag into a round slot. Gray means that block cannot use it." : "Drag onto the board or onto a stack"])];
+  const bits = [el("p", { class: "hint" }, [cat === "math" ? "Drag a math block into a number slot." : "Drag onto a stack. Values only fit slots of the same type."])];
   if (cat === "events") {
     bits.push(paletteHat("#ffbf00", "when item clicked", { type: "hat", hat: "item" }, () => dropHat({ hat: "item" }, spawnPos())));
     HOOKS.forEach(([id, labelText]) => bits.push(paletteHat("#ffbf00", "when " + labelText.toLowerCase(), { type: "hat", hat: "hook", hook: id }, () => dropHat({ hat: "hook", hook: id }, spawnPos()))));
     bits.push(paletteHat("#ff6680", "define my block", { type: "hat", hat: "service" }, () => dropHat({ hat: "service" }, spawnPos())));
     FEATURE_EVENTS.forEach(([id, labelText]) => bits.push(paletteHat("#0fbd8c", "when " + labelText, { type: "hat", hat: "feature", event: id }, () => dropHat({ hat: "feature", event: id }, spawnPos()))));
   }
-  if (cat === "vars") VAR_LIST.forEach((entry) => bits.push(paletteVar(entry)));
+  if (cat === "math") MATH.forEach((row) => bits.push(paletteMath(row)));
   ACTIONS.filter((a) => a[2] === cat).forEach((a) => bits.push(paletteStack(a)));
   fly.replaceChildren(...bits);
   const scripts = [];
   model.services.forEach((service) => {
     const script = { kind: "service", id: service.id };
-    scripts.push(scriptBox(hat("#ff6680", ["define ", bubble(service.name, (name) => { service.name = name; codeOnly(); persist(); }, true), xbtn(() => { model.services = model.services.filter((s) => s.id !== service.id); })], script), service.body, script, service));
+    scripts.push(scriptBox(hat("#ff6680", ["define ", bubble(service.name, (name) => {
+      const live = model.services.find((s) => s.id === service.id);
+      if (!live) return;
+      const previous = live.name;
+      live.name = name;
+      if (previous && previous !== name) {
+        eachScript((body) => {
+          const walk = (list) => (list || []).forEach((stmt) => {
+            if (stmt.kind === "callService" && stmt.name === previous) stmt.name = name;
+            if (stmt.then) walk(stmt.then);
+          });
+          walk(body);
+        });
+      }
+      codeOnly();
+    }, true), xbtn(() => { model.services = model.services.filter((s) => s.id !== service.id); }), ...hatChips(script, service)], script), service.body, script, service));
   });
   model.items.forEach((item) => item.hooks.forEach((hook) => {
     const script = { kind: "hook", itemId: item.id, hookId: hook.id };
-    scripts.push(scriptBox(hat("#ffbf00", ["when ", bubble(item.key, (key) => { item.key = key; codeOnly(); persist(); }, true), " " + hookLabel(hook.name).toLowerCase(), xbtn(() => {
+    scripts.push(scriptBox(hat("#ffbf00", ["when ", bubble(item.key, (key) => {
+      const live = model.items.find((entry) => entry.id === item.id);
+      if (live) live.key = key;
+      codeOnly();
+    }, true), " " + hookLabel(hook.name).toLowerCase(), xbtn(() => {
       item.hooks = item.hooks.filter((h) => h.id !== hook.id);
       model.items = model.items.filter((entry) => entry.hooks.length);
-    })], script), hook.body, script, hook));
+    }), ...hatChips(script, hook)], script), hook.body, script, hook));
   }));
   model.features.forEach((feature) => {
     const script = { kind: "feature", id: feature.id };
-    scripts.push(scriptBox(hat("#0fbd8c", ["when ", bubble(feature.name, (name) => { feature.name = name; codeOnly(); persist(); }, true), menu(feature.event || "onChat", FEATURE_EVENTS, (event) => { feature.event = event; render(); }), xbtn(() => { model.features = model.features.filter((f) => f.id !== feature.id); })], script), feature.body, script, feature));
+    scripts.push(scriptBox(hat("#0fbd8c", ["when ", bubble(feature.name, (name) => {
+      const live = model.features.find((f) => f.id === feature.id);
+      if (live) live.name = name;
+      codeOnly();
+    }, true), menu(feature.event || "onChat", FEATURE_EVENTS, (eventName) => {
+      const live = model.features.find((f) => f.id === feature.id);
+      if (live) live.event = eventName;
+      render();
+    }), xbtn(() => { model.features = model.features.filter((f) => f.id !== feature.id); }), ...hatChips(script, feature)], script), feature.body, script, feature));
   });
   (model.loose || []).forEach((loose) => {
     const script = { kind: "loose", id: loose.id };
@@ -1202,7 +1645,11 @@ document.getElementById("undo").addEventListener("click", () => {
   render();
   note("Undid last change.");
 });
+document.addEventListener("pointerdown", (e) => {
+  if (varMenu && !varMenu.contains(e.target)) closeVarMenu();
+});
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeVarMenu();
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
     e.preventDefault();
     document.getElementById("undo").click();
