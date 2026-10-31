@@ -11,7 +11,7 @@
   header { padding: 22px clamp(16px, 4vw, 48px); background: #1a2229; border-bottom: 1px solid #34414b; }
   h1 { margin: 0; font-size: 23px; letter-spacing: .04em; }
   header p { margin: 6px 0 0; color: #aebbc4; font-size: 13px; }
-  main { display: grid; grid-template-columns: minmax(300px, 1.15fr) minmax(300px, .85fr); gap: 18px; max-width: 1180px; margin: 22px auto; padding: 0 18px 36px; }
+  main { display: grid; grid-template-columns: minmax(280px, 1.05fr) minmax(280px, .9fr) minmax(230px, 300px); gap: 18px; max-width: 1480px; margin: 22px auto; padding: 0 18px 36px; }
   section { background: #1a2229; border: 1px solid #34414b; border-radius: 10px; padding: 18px; min-width: 0; }
   h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: .12em; color: #b8d6c1; }
   h3 { margin: 18px 0 8px; font-size: 13px; }
@@ -43,18 +43,42 @@
   .actions button { flex: 1; min-width: 130px; }
   pre { overflow: auto; max-height: 310px; padding: 12px; background: #10161b; border: 1px solid #34414b; border-radius: 6px; color: #d7e4dc; font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
   .hidden { display: none !important; }
-  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .editor-grid { grid-template-columns: minmax(0,1fr) 112px; } #preview { width: 100%; height: auto; } }
+  #pack-explorer { position: sticky; top: 18px; align-self: start; display: flex; flex-direction: column; max-height: calc(100vh - 36px); overflow: auto; }
+  #pack-explorer h2 { flex: none; }
+  #explorer-list { list-style: none; margin: 12px 0 0; padding: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
+  #explorer-list button.explorer-item { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; background: #10161b; border-color: #34414b; padding: 7px; }
+  #explorer-list button.explorer-item:hover { background: #24303a; }
+  #explorer-list button.explorer-item.selected { background: #24362c; border-color: #5d9970; }
+  .explorer-thumb, .explorer-badge { width: 32px; height: 32px; flex: none; border-radius: 4px; background: #222a30; }
+  .explorer-badge { display: grid; place-items: center; font-size: 11px; color: #b8d6c1; border: 1px solid #34414b; }
+  .explorer-copy { min-width: 0; flex: 1; }
+  .explorer-copy strong, .explorer-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .explorer-copy strong { font-size: 13px; font-weight: 600; }
+  .explorer-copy span { color: #9eabb3; font-size: 11px; }
+  .explorer-menu { position: fixed; z-index: 30; display: flex; flex-direction: column; min-width: 132px; padding: 4px; background: #1a2229; border: 1px solid #6a7c88; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+  .explorer-menu button { width: 100%; text-align: left; background: #4a3030; border-color: #8a5555; }
+  .explorer-menu button:hover { background: #6a3d3d; }
+  #service-editor, #feature-editor { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+  #service-editor button, #feature-editor button { align-self: end; }
+  .entry-focus { border-radius: 8px; outline: 1px solid #5d9970; background: #15241b; padding: 8px; }
+  body:not([data-editor="item"]) .draw-tools,
+  body:not([data-editor="item"]) .mesh-import { opacity: .38; pointer-events: none; }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr 1fr; }
+    #pack-explorer { grid-column: 1 / -1; position: static; max-height: none; }
+  }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } #pack-explorer { grid-column: auto; } .editor-grid { grid-template-columns: minmax(0,1fr) 112px; } #preview { width: 100%; height: auto; } }
 </style>
 </head>
-<body>
+<body data-editor="item">
 <header>
   <h1>Co-op Sprite Studio</h1>
-  <p>Draw pixel sprites, configure item or block properties, write unique mechanics and reusable JavaScript services, and export one definition or a multi-item pack.</p>
+  <p>Draw pixel sprites, configure item or block properties, and keep a pack of entries. Open any entry from the explorer, and the one you were editing is saved when you switch.</p>
 </header>
 <main>
   <section>
     <h2>Sprite canvas</h2>
-    <div class="editor-grid">
+    <div class="editor-grid draw-tools">
       <div>
         <canvas id="sprite" width="512" height="512" aria-label="Pixel sprite drawing area"></canvas>
         <div class="toolbar">
@@ -74,10 +98,11 @@
         </label>
       </div>
     </div>
-    <div class="palette" id="palette" aria-label="Color palette"></div>
-    <p class="hint">Click or drag to draw. Transparent pixels stay transparent. Use Undo to step back through edits.</p>
-    <h3>Optional 3D mesh</h3>
-    <div class="mesh-box">
+    <div class="palette draw-tools" id="palette" aria-label="Color palette"></div>
+    <p class="hint draw-tools">Click or drag to draw. Transparent pixels stay transparent. Use Undo to step back through edits.</p>
+    <p id="canvas-note" class="hint hidden">This pack entry has no sprite. Pick an item or block in the explorer to draw.</p>
+    <h3 class="mesh-import">Optional 3D mesh</h3>
+    <div class="mesh-box mesh-import">
       <label for="mesh-file">Import a binary glTF mesh (.glb, up to 20 MB)
         <input id="mesh-file" type="file" accept=".glb,model/gltf-binary">
       </label>
@@ -89,6 +114,8 @@
   </section>
   <section>
     <h2>Pack entry editor</h2>
+    <p id="editing-banner" class="hint">New entry. It is saved into the pack when you open another entry.</p>
+    <div id="entry-identity">
     <label for="kind">Entry type
       <select id="kind">
         <option value="tool">Tool / weapon</option>
@@ -97,6 +124,7 @@
       </select>
     </label>
     <label for="name">Entry name<input id="name" type="text" maxlength="48" value="New Tool"></label>
+    </div>
     <div id="definition-fields">
     <div class="field-grid">
       <label for="registry-id">Numeric registry ID<input id="registry-id" type="number" min="30" max="65535" step="1" value="120"></label>
@@ -189,21 +217,24 @@
       <h3 style="margin-top:0">Pack entries <span id="pack-count" class="muted">0 entries</span></h3>
       <label for="pack-name">Pack name<input id="pack-name" value="Co-op item pack"></label>
       <label for="pack-id">Shared pack ID<input id="pack-id" value="coop_item_pack"></label>
-      <p class="hint">A pack can contain items, blocks, shared JavaScript services, and independent features such as chat listeners. Add the current item/block, or add a service/feature reference to the pack module.</p>
-      <div id="pack-items" class="muted">No items in the pack.</div>
-      <div class="field-grid">
+      <p class="hint">Everything in the pack is listed in the explorer. Click an entry to edit it. The entry you leave is saved automatically. Import a pack JSON file, an item JSON file, or a standalone HTML export to keep working on it.</p>
+      <div id="pack-items" class="muted">No entries yet. Save an item, or import a pack.</div>
+      <div id="service-editor">
         <label for="service-name">JavaScript service name<input id="service-name" placeholder="playSound"></label>
         <button type="button" id="pack-add-service">Add service entry</button>
+      </div>
+      <div id="feature-editor">
         <label for="feature-name">Feature name<input id="feature-name" placeholder="greeting"></label>
         <label for="feature-event">Feature event<select id="feature-event"><option value="onChat">Chat message</option><option value="onTick">Game tick</option><option value="onPlayerJoin">Player joins</option><option value="onPlayerLeave">Player leaves</option></select></label>
         <label for="feature-handler">Feature handler key<input id="feature-handler" placeholder="chatListener"></label>
         <button type="button" id="pack-add-feature">Add feature entry</button>
       </div>
       <div class="actions">
-        <button type="button" id="pack-add">Add current entry to pack</button>
+        <button type="button" id="pack-add">Save and start new entry</button>
         <button type="button" id="pack-remove">Remove last</button>
         <button type="button" id="pack-clear">Clear pack</button>
-          <button type="button" id="download-pack" class="primary">Export pack JSON</button>
+        <button type="button" id="import-pack">Import pack</button>
+        <button type="button" id="download-pack" class="primary">Export pack JSON</button>
       </div>
     </section>
     <div class="actions">
@@ -211,13 +242,25 @@
       <button type="button" id="download-json">Export import bundle JSON</button>
       <button type="button" id="download-js">Export game integration JavaScript</button>
       <button type="button" id="import-json">Import definition JSON</button>
-      <input id="import-file" type="file" accept=".json,application/json" class="hidden">
+      <input id="import-file" type="file" accept=".json,.html,application/json,text/html" class="hidden">
     </div>
     <h3>Definition preview</h3>
     <pre id="definition-preview" aria-live="polite"></pre>
     <div id="message" class="muted" aria-live="polite"></div>
   </section>
+  <section id="pack-explorer" aria-label="Pack explorer">
+    <h2>Pack explorer</h2>
+    <p class="hint">Click an entry to edit it. Right-click an entry to delete it. The menu closes when the pointer leaves.</p>
+    <div class="actions">
+      <button type="button" id="explorer-new">New entry</button>
+      <button type="button" id="explorer-import">Import pack</button>
+    </div>
+    <ul id="explorer-list"></ul>
+  </section>
 </main>
+<div id="explorer-menu" class="explorer-menu hidden" role="menu">
+  <button type="button" id="explorer-delete" role="menuitem">Delete</button>
+</div>
 <script>
 (() => {
   'use strict';
@@ -240,6 +283,13 @@
   const packDefinitions = [];
   const packScriptEntries = [];
   let packModuleDraft = '';
+  let editorMode = 'item';
+  let applyingEntry = false;
+  let dirty = false;
+  let editing = null;
+  let studioSeq = 0;
+  let menuAnchor = null;
+  let menuTargetId = null;
   const MAX_MESH_BYTES = 20 * 1024 * 1024;
 
   function pushHistory() {
@@ -268,10 +318,29 @@
       targetCtx.stroke();
     }
   }
+  function drawThumb(target, px, n) {
+    target.width = target.height = 32;
+    const thumbCtx = target.getContext('2d');
+    thumbCtx.imageSmoothingEnabled = false;
+    thumbCtx.clearRect(0, 0, 32, 32);
+    if (!px || !n) return;
+    const cell = 32 / n;
+    for (let i = 0; i < px.length; i++) {
+      if (!px[i]) continue;
+      thumbCtx.fillStyle = px[i];
+      thumbCtx.fillRect((i % n) * cell, Math.floor(i / n) * cell, cell, cell);
+    }
+  }
+  function refreshActiveThumb() {
+    if (editorMode !== 'item') return;
+    const thumb = document.querySelector('#explorer-list .explorer-item.selected canvas');
+    if (thumb) drawThumb(thumb, pixels, size);
+  }
   function render() {
     drawCanvas(canvas, ctx, pixels, true);
     drawCanvas(preview, previewCtx);
     updateDefinitionPreview();
+    refreshActiveThumb();
   }
   function pixelAt(event) {
     const rect = canvas.getBoundingClientRect();
@@ -284,6 +353,7 @@
     const value = activeTool === 'eraser' ? null : selectedColor;
     if (pixels[i] === value) return;
     pixels[i] = value;
+    dirty = true;
     render();
   }
   canvas.addEventListener('pointerdown', event => {
@@ -324,12 +394,13 @@
       $('size').value = String(size);
       canvas.width = canvas.height = size * 32;
       pixels = previous.pixels;
+      dirty = true;
       render();
     }
   });
   $('clear').addEventListener('click', () => {
     if (!pixels.some(Boolean)) return;
-    pushHistory(); pixels = Array(size * size).fill(null); render();
+    pushHistory(); pixels = Array(size * size).fill(null); dirty = true; render();
   });
   $('size').addEventListener('change', event => {
     const newSize = Number(event.target.value);
@@ -358,6 +429,7 @@
       }
     }
     canvas.width = canvas.height = size * 32;
+    dirty = true;
     render();
   });
   paletteColors.forEach(color => {
@@ -383,28 +455,75 @@
     const kind = $('kind').value;
     const isTool = kind === 'tool';
     const isJavaScript = kind === 'javascript';
-    const oldDefaultName = lastKind === 'tool' ? 'New Tool' :
-      lastKind === 'block' ? 'New Block' : 'Pack-wide JavaScript';
-    if ($('name').value === oldDefaultName) {
-      $('name').value = isJavaScript ? 'Pack-wide JavaScript' : isTool ? 'New Tool' : 'New Block';
+    if (!applyingEntry && isJavaScript && editorMode === 'item') {
+      const previousKind = lastKind === 'block' ? 'block' : 'tool';
+      $('kind').value = previousKind;
+      try {
+        if (findEditing() || dirty || !blankItem()) saveWorkingEntry();
+      } catch (error) {
+        setEditorMode('item');
+        $('message').textContent = 'Save this item before editing the JavaScript module: ' + error.message;
+        return;
+      }
+      $('kind').value = 'javascript';
+      const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
+      editing = moduleEntry ? { bucket: 'script', id: moduleEntry._studioId } : null;
+      dirty = false;
+      $('name').value = moduleEntry ? moduleEntry.name : 'Pack-wide JavaScript';
+      $('pack-script').value = moduleEntry ? (moduleEntry.source || '') : packModuleDraft;
+      lastKind = 'javascript';
+      setEditorMode('javascript');
+      $('editing-banner').textContent = moduleEntry
+        ? 'Editing JavaScript module ' + moduleEntry.name + '. Opening another entry saves this one.'
+        : 'New JavaScript module. It is saved into the pack when you open another entry.';
+      renderPack();
+      return;
+    }
+    if (!applyingEntry && !isJavaScript && editorMode !== 'item') {
+      try {
+        saveWorkingEntry();
+      } catch (error) {
+        applyingEntry = true;
+        $('kind').value = editorMode === 'javascript' ? 'javascript' : lastKind;
+        applyingEntry = false;
+        setEditorMode(editorMode);
+        $('message').textContent = 'Save the current entry before switching: ' + error.message;
+        return;
+      }
+      editing = null;
+      dirty = false;
+      lastKind = kind;
+      setEditorMode('item');
+      clearForNextPackItem();
+      $('editing-banner').textContent = 'New entry. It is saved into the pack when you open another entry.';
+      renderPack();
+      $('message').textContent = 'Saved. Ready for a new entry.';
+      return;
+    }
+    if (!applyingEntry) {
+      const oldDefaultName = lastKind === 'tool' ? 'New Tool' :
+        lastKind === 'block' ? 'New Block' : 'Pack-wide JavaScript';
+      if ($('name').value === oldDefaultName) {
+        $('name').value = isJavaScript ? 'Pack-wide JavaScript' : isTool ? 'New Tool' : 'New Block';
+      }
+      const editingDefinition = findEditing();
+      const keepIdentity = editingDefinition && editingDefinition.bucket === 'definition' && !isJavaScript;
+      if (!isJavaScript && !keepIdentity) {
+        try {
+          $('registry-id').value = String(nextFreeId(kind));
+          $('atlas-index').value = String(nextFreeTile());
+        } catch (error) {
+          $('message').textContent = error.message;
+        }
+        if (!$('registry-key').dataset.edited) {
+          $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+        }
+        $('category').value = isTool ? 'tools' : 'building';
+      }
+      if (isJavaScript) $('pack-script').value = packModuleDraft;
     }
     lastKind = kind;
-    $('definition-fields').classList.toggle('hidden', isJavaScript);
-    $('javascript-fields').classList.toggle('hidden', !isJavaScript);
-    $('tool-fields').classList.toggle('hidden', !isTool);
-    $('block-fields').classList.toggle('hidden', isTool || isJavaScript);
-    $('pack-script').value = packModuleDraft;
-    $('pack-add').textContent = isJavaScript ? 'Add JavaScript module to pack' : 'Add current item/block';
-    if (!isJavaScript) {
-      $('registry-id').value = String(nextFreeId(kind));
-      $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
-      $('category').value = isTool ? 'tools' : 'building';
-      $('atlas-index').value = String(nextFreeTile());
-    }
-    $('export').disabled = isJavaScript;
-    $('download-json').disabled = isJavaScript;
-    $('download-js').disabled = isJavaScript;
-    updateDefinitionPreview();
+    setEditorMode(isJavaScript ? 'javascript' : 'item');
   });
   $('name').addEventListener('input', () => {
     if (!$('registry-key').dataset.edited) {
@@ -568,8 +687,10 @@
     const id = numericId($('registry-id').value, 'Registry ID');
     const atlasIndex = numericId($('atlas-index').value, 'Atlas tile', true);
     if (atlasIndex < 54 || atlasIndex > 127) throw new Error('Choose an unused custom atlas tile from 54 to 127.');
-    if (packDefinitions.some(definition => definition.registry.id === id)) throw new Error('This registry ID is already in the pack.');
-    if (packDefinitions.some(definition => definition.texture.atlasIndex === atlasIndex)) throw new Error('This atlas tile is already in the pack.');
+    const openEntry = findEditing();
+    const selfDefinition = openEntry && openEntry.bucket === 'definition' ? openEntry.entry : null;
+    if (packDefinitions.some(definition => definition !== selfDefinition && definition.registry.id === id)) throw new Error('This registry ID is already in the pack.');
+    if (packDefinitions.some(definition => definition !== selfDefinition && definition.texture.atlasIndex === atlasIndex)) throw new Error('This atlas tile is already in the pack.');
     if (kind === 'tool' && id < 120) throw new Error('Tool/item IDs must be 120 or higher to avoid existing game item IDs.');
     if (kind === 'block' && id < 30) throw new Error('Block IDs must be 30 or higher to avoid existing game block IDs.');
     if (kind === 'block' && (id === 99 || (id >= 100 && id <= 119))) throw new Error('Block IDs 99 and 100–119 are already reserved by the game.');
@@ -656,13 +777,31 @@
       : '';
     return common;
   }
+  function currentEntryName() {
+    if (editorMode === 'service') return $('service-name').value.trim() || 'Service';
+    if (editorMode === 'feature') return $('feature-name').value.trim() || 'Feature';
+    return $('name').value.trim() || 'Entry';
+  }
+  function syncSelectedExplorerLabel() {
+    const strong = document.querySelector('#explorer-list .explorer-item.selected .explorer-copy strong');
+    if (strong) strong.textContent = currentEntryName() || 'New entry';
+  }
   function updateDefinitionPreview() {
     if (!$('definition-preview')) return;
-    if ($('kind').value === 'javascript') {
-      $('definition-preview').textContent = packScriptEntries.some(entry => entry.type === 'javascript')
+    syncSelectedExplorerLabel();
+    if (editorMode === 'service') {
+      $('definition-preview').textContent = 'Service reference: ' + ($('service-name').value.trim() || '(unnamed)');
+      return;
+    }
+    if (editorMode === 'feature') {
+      $('definition-preview').textContent = 'Feature ' + ($('feature-name').value.trim() || '(unnamed)') +
+        ' on ' + $('feature-event').value + ' → ' + ($('feature-handler').value.trim() || '(handler)');
+      return;
+    }
+    if (editorMode === 'javascript' || $('kind').value === 'javascript') {
+      $('definition-preview').textContent = $('pack-script').value.trim()
         ? 'Pack-wide JavaScript module: ' + ($('name').value.trim() || 'Pack-wide JavaScript')
-        : 'Write the shared module, then add it to the pack.';
-      $('message').textContent = '';
+        : 'Write the shared module. It is saved into the pack when you open another entry.';
       return;
     }
     try {
@@ -673,10 +812,20 @@
       $('message').textContent = error.message;
     }
   }
+  function marksEntryDirty(el) {
+    if (el.id === 'kind' || el.id === 'pack-name' || el.id === 'pack-id' || el.id === 'import-file') return false;
+    if (el.id === 'service-name' && editorMode !== 'service') return false;
+    if ((el.id === 'feature-name' || el.id === 'feature-event' || el.id === 'feature-handler') && editorMode !== 'feature') return false;
+    return true;
+  }
   document.querySelectorAll('input, select, textarea').forEach(el => {
     if (el.id !== 'mesh-file' && el.id !== 'color' && el.id !== 'size') {
-      el.addEventListener('input', updateDefinitionPreview);
-      el.addEventListener('change', updateDefinitionPreview);
+      const onEdit = () => {
+        if (!applyingEntry && marksEntryDirty(el)) dirty = true;
+        updateDefinitionPreview();
+      };
+      el.addEventListener('input', onEdit);
+      el.addEventListener('change', onEdit);
     }
   });
   function loadModelViewer() {
@@ -714,6 +863,7 @@
       meshUrl = URL.createObjectURL(new Blob([buffer], { type: 'model/gltf-binary' }));
       $('mesh-info').textContent = file.name + ' · ' + (file.size / 1024 / 1024).toFixed(2) + ' MB · embedded in HTML export';
       $('remove-mesh').classList.remove('hidden');
+      dirty = true;
       $('message').textContent = 'Mesh imported.';
       updateDefinitionPreview();
       try {
@@ -729,6 +879,7 @@
   });
   $('remove-mesh').addEventListener('click', () => {
     mesh = null;
+    dirty = true;
     if (meshUrl) URL.revokeObjectURL(meshUrl);
     meshUrl = null;
     $('mesh-view').removeAttribute('src');
@@ -789,145 +940,730 @@
     for (let tile = 54; tile <= 127; tile++) if (!used.has(tile)) return tile;
     throw new Error('The pack has used all available custom texture tiles (54–127).');
   }
-  function renderPack() {
-    const entries = [
-      ...packDefinitions.map(definition => ({
-        type: definition.kind,
-        name: definition.name,
-        detail: 'ID ' + definition.registry.id +
-          (definition.mechanics && definition.mechanics.unique ? ', behavior: ' + definition.mechanics.unique : ''),
-      })),
-      ...packScriptEntries,
-    ];
-    $('pack-count').textContent = entries.length + (entries.length === 1 ? ' entry' : ' entries');
-    $('pack-items').textContent = entries.length
-      ? entries.map(entry => (entry.type === 'javascript' ? 'JavaScript module' : entry.type) +
-        ': ' + entry.name + (entry.detail ? ' (' + entry.detail + ')' : '')).join(' · ')
-      : 'No entries in the pack.';
+  function assignStudioId(obj, existing) {
+    const value = existing || ++studioSeq;
+    Object.defineProperty(obj, '_studioId', { value, enumerable: false, configurable: true });
+    if (value > studioSeq) studioSeq = value;
+    return obj;
   }
-  function clearForNextPackItem() {
-    pushHistory();
-    pixels = Array(size * size).fill(null);
-    $('name').value = $('kind').value === 'tool' ? 'New Tool' : 'New Block';
-    $('registry-id').value = String(nextFreeId($('kind').value));
-    $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
-    $('registry-key').dataset.edited = '';
-    $('atlas-index').value = String(nextFreeTile());
-    $('mechanics').value = '';
-    $('recipe-type').value = 'none';
-    $('recipe-ingredients').value = '';
-    $('shaped-recipe').classList.add('hidden');
-    $('shapeless-recipe').classList.add('hidden');
-    $('smelting-recipe').classList.add('hidden');
-    Array.from($('recipe-pattern').children).forEach(input => { input.value = '0'; });
-    if (meshUrl) URL.revokeObjectURL(meshUrl);
-    mesh = null;
-    meshUrl = null;
-    $('mesh-view').removeAttribute('src');
-    $('mesh-view').classList.add('hidden');
-    $('mesh-info').textContent = 'No mesh imported.';
-    $('remove-mesh').classList.add('hidden');
-    canvas.width = canvas.height = size * 32;
-    render();
+  function findEditing() {
+    if (!editing) return null;
+    if (editing.bucket === 'definition') {
+      const index = packDefinitions.findIndex(entry => entry._studioId === editing.id);
+      return index >= 0 ? { bucket: 'definition', index, entry: packDefinitions[index] } : null;
+    }
+    const index = packScriptEntries.findIndex(entry => entry._studioId === editing.id);
+    return index >= 0 ? { bucket: 'script', index, entry: packScriptEntries[index] } : null;
+  }
+  function blankItem() {
+    if (editorMode === 'service' || editorMode === 'feature') return false;
+    if (editorMode === 'javascript' || $('kind').value === 'javascript') return !$('pack-script').value.trim();
+    if (pixels.some(Boolean) || mesh) return false;
+    if ($('mechanics').value.trim() || $('mechanics-notes').value.trim()) return false;
+    if ($('recipe-type').value !== 'none') return false;
+    const defaultName = $('kind').value === 'block' ? 'New Block' : 'New Tool';
+    return $('name').value.trim() === defaultName;
+  }
+  function writeDefinition(index, definition) {
+    assignStudioId(definition, packDefinitions[index]._studioId);
+    packDefinitions[index] = definition;
+  }
+  function setEditorMode(mode) {
+    editorMode = mode;
+    document.body.dataset.editor = mode;
+    const isItem = mode === 'item';
+    const isJavaScript = mode === 'javascript';
+    $('entry-identity').classList.toggle('hidden', mode === 'service' || mode === 'feature');
+    $('definition-fields').classList.toggle('hidden', !isItem);
+    $('javascript-fields').classList.toggle('hidden', !isJavaScript);
+    $('tool-fields').classList.toggle('hidden', !isItem || $('kind').value !== 'tool');
+    $('block-fields').classList.toggle('hidden', !isItem || $('kind').value !== 'block');
+    $('service-editor').classList.toggle('entry-focus', mode === 'service');
+    $('feature-editor').classList.toggle('entry-focus', mode === 'feature');
+    $('export').disabled = !isItem;
+    $('download-json').disabled = !isItem;
+    $('download-js').disabled = !isItem;
+    $('canvas-note').classList.toggle('hidden', isItem);
+    if (mode === 'service') $('canvas-note').textContent = 'Services have no sprite. Edit the service name below, then click another entry to save it.';
+    else if (mode === 'feature') $('canvas-note').textContent = 'Features have no sprite. Edit the feature below, then click another entry to save it.';
+    else if (isJavaScript) $('canvas-note').textContent = 'The JavaScript module has no sprite. Write the shared module, then click another entry to save it.';
     updateDefinitionPreview();
   }
-  $('pack-add').addEventListener('click', () => {
+  function saveWorkingEntry() {
+    const located = findEditing();
+    if (editorMode === 'service') {
+      if (!located || located.entry.type !== 'service') return;
+      const name = $('service-name').value.trim();
+      if (!/^[a-zA-Z_$][\w$]*$/.test(name)) throw new Error('Service name must be a valid JavaScript identifier.');
+      if (packScriptEntries.some(entry => entry !== located.entry && entry.type === 'service' && entry.name === name)) {
+        throw new Error('That JavaScript service is already in the pack.');
+      }
+      located.entry.name = name;
+      dirty = false;
+      return;
+    }
+    if (editorMode === 'feature') {
+      if (!located || located.entry.type !== 'feature') return;
+      const name = $('feature-name').value.trim();
+      const handler = $('feature-handler').value.trim();
+      const eventName = $('feature-event').value;
+      if (!/^[a-zA-Z_$][\w$]*$/.test(name) || !/^[a-zA-Z_$][\w$]*$/.test(handler)) {
+        throw new Error('Feature name and handler key must be valid JavaScript identifiers.');
+      }
+      if (!['onChat', 'onTick', 'onPlayerJoin', 'onPlayerLeave'].includes(eventName)) throw new Error('Choose a feature event.');
+      if (packScriptEntries.some(entry => entry !== located.entry && entry.type === 'feature' && entry.name === name)) {
+        throw new Error('That feature name is already in the pack.');
+      }
+      located.entry.name = name;
+      located.entry.handler = handler;
+      located.entry.event = eventName;
+      dirty = false;
+      return;
+    }
+    if (editorMode === 'javascript') {
+      const source = $('pack-script').value;
+      if (source.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
+      if (source.trim()) new Function('return (' + source + ');');
+      packModuleDraft = source;
+      const name = $('name').value.trim() || 'Pack-wide JavaScript';
+      let moduleEntry = located && located.entry.type === 'javascript'
+        ? located.entry
+        : packScriptEntries.find(entry => entry.type === 'javascript');
+      if (!source.trim() && !moduleEntry) return;
+      if (!moduleEntry) {
+        moduleEntry = assignStudioId({ type: 'javascript', name, source });
+        packScriptEntries.push(moduleEntry);
+      } else {
+        moduleEntry.name = name;
+        moduleEntry.source = source;
+      }
+      editing = { bucket: 'script', id: moduleEntry._studioId };
+      dirty = false;
+      return;
+    }
+    if (!located && blankItem() && !dirty) return;
+    const definition = makeDefinition();
+    if (located && located.bucket === 'definition') writeDefinition(located.index, definition);
+    else {
+      const created = assignStudioId(definition);
+      packDefinitions.push(created);
+      editing = { bucket: 'definition', id: created._studioId };
+    }
+    dirty = false;
+  }
+  function saveAndStartNew() {
     try {
-      if ($('kind').value === 'javascript') {
-        const source = $('pack-script').value.trim();
-        if (!source) throw new Error('Write the pack-wide JavaScript module before adding it.');
-        if (source.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
-        new Function('return (' + source + ');');
-        packModuleDraft = source;
-        const existing = packScriptEntries.find(entry => entry.type === 'javascript');
-        if (existing) {
-          existing.name = $('name').value.trim() || 'Pack-wide JavaScript';
-          existing.source = source;
-        } else {
-          packScriptEntries.push({
-            type: 'javascript',
-            name: $('name').value.trim() || 'Pack-wide JavaScript',
-            source,
-          });
-        }
-        renderPack();
-        updateDefinitionPreview();
-        $('message').textContent = 'Pack-wide JavaScript module added to the pack.';
+      if (!(findEditing() || dirty || !blankItem())) {
+        $('message').textContent = 'Already editing a new entry.';
         return;
       }
-      if (packDefinitions.length >= 74) throw new Error('The pack has used all 74 custom texture tiles (54–127).');
-      const definition = makeDefinition();
-      if (packDefinitions.some(entry => entry.registry.id === definition.registry.id)) throw new Error('This registry ID is already in the pack.');
-      if (packDefinitions.some(entry => entry.texture.atlasIndex === definition.texture.atlasIndex)) throw new Error('This atlas tile is already in the pack.');
-      packDefinitions.push(definition);
-      renderPack();
-      clearForNextPackItem();
-      $('message').textContent = definition.name + ' added to the pack.';
+      const savedName = currentEntryName();
+      saveWorkingEntry();
+      startNewEntry();
+      $('message').textContent = savedName + ' saved. Ready for a new entry.';
     } catch (error) {
-      $('message').textContent = 'Could not add item to pack: ' + error.message;
+      $('message').textContent = 'Could not save entry: ' + error.message;
     }
-  });
-  $('pack-add-service').addEventListener('click', () => {
-    const name = $('service-name').value.trim();
-    if (!/^[a-zA-Z_$][\w$]*$/.test(name)) {
-      $('message').textContent = 'Service name must be a valid JavaScript identifier.';
+  }
+  function assertSprite(sprite, label) {
+    const name = label || 'This item';
+    if (!sprite || !Array.isArray(sprite.pixels) ||
+        ![16, 32, 64].includes(sprite.width) ||
+        sprite.height !== sprite.width ||
+        sprite.pixels.length !== sprite.width * sprite.width ||
+        !sprite.pixels.every(pixel => pixel === null || (typeof pixel === 'string' && /^#[0-9a-f]{6}$/i.test(pixel)))) {
+      throw new Error(name + ' has invalid sprite pixel data.');
+    }
+  }
+  function decodeMesh(meshDef) {
+    if (!meshDef || !meshDef.base64) return null;
+    let raw;
+    try { raw = atob(meshDef.base64); }
+    catch (error) { throw new Error('The embedded mesh could not be decoded.'); }
+    if (raw.length > MAX_MESH_BYTES || raw.length < 12) throw new Error('The embedded mesh has an invalid size.');
+    const bytes = Uint8Array.from(raw, character => character.charCodeAt(0));
+    const header = new DataView(bytes.buffer);
+    if (header.getUint32(0, true) !== 0x46546c67 || header.getUint32(4, true) !== 2) {
+      throw new Error('The embedded mesh is not a valid binary glTF 2.0 file.');
+    }
+    return { bytes, base64: meshDef.base64, name: meshDef.fileName || 'imported.glb' };
+  }
+  function showMesh(importedMesh) {
+    if (meshUrl) URL.revokeObjectURL(meshUrl);
+    if (!importedMesh) {
+      mesh = null;
+      meshUrl = null;
+      $('mesh-view').removeAttribute('src');
+      $('mesh-view').classList.add('hidden');
+      $('mesh-info').textContent = 'No mesh imported.';
+      $('remove-mesh').classList.add('hidden');
       return;
     }
-    if (packScriptEntries.some(entry => entry.type === 'service' && entry.name === name)) {
-      $('message').textContent = 'That JavaScript service is already in the pack.';
-      return;
+    const bytes = importedMesh.bytes;
+    mesh = { name: importedMesh.name, bytes: bytes.buffer, base64: importedMesh.base64 };
+    meshUrl = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }));
+    $('mesh-info').textContent = mesh.name + ' · ' + (bytes.length / 1024 / 1024).toFixed(2) + ' MB · embedded in HTML export';
+    $('remove-mesh').classList.remove('hidden');
+    $('mesh-view').src = meshUrl;
+    $('mesh-view').classList.remove('hidden');
+  }
+  function applyDefinition(definition) {
+    assertSprite(definition.sprite, definition.name || 'This item');
+    const importedMesh = definition.mesh && definition.mesh.base64 ? decodeMesh(definition.mesh) : null;
+    applyingEntry = true;
+    try {
+      pushHistory();
+      size = definition.sprite.width;
+      $('size').value = String(size);
+      canvas.width = canvas.height = size * 32;
+      pixels = definition.sprite.pixels.slice();
+      $('name').value = definition.name || 'Imported item';
+      $('kind').value = definition.kind === 'block' ? 'block' : 'tool';
+      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
+      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
+      $('registry-key').dataset.edited = 'true';
+      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
+      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
+      const oldFeatureHooks = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
+        ? definition.features.source || ''
+        : '';
+      const priorUniqueCode = definition.mechanics &&
+        definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+        ? definition.mechanics.unique || ''
+        : oldFeatureHooks;
+      $('mechanics-notes').value = definition.mechanics &&
+        (definition.mechanics.description || (definition.mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2'
+          ? definition.mechanics.unique
+          : '')) || '';
+      $('mechanics').value = definition.mechanics &&
+        definition.mechanics.uniqueRuntime === 'coop1.10.pack-hook-ref.v1'
+        ? definition.mechanics.unique || ''
+        : priorUniqueCode ? 'legacy' : '';
+      if (definition.kind === 'tool') {
+        const base = definition.base || {};
+        $('damage').value = String(base.damage ?? 4);
+        $('cooldown').value = String(base.cooldownSeconds ?? 0.55);
+        $('knockback').value = String(base.knockbackMultiplier ?? 1);
+        $('reach').value = String(base.reachBlocks ?? 4);
+        $('durability').value = String(base.durabilityUses ?? 100);
+        $('mining-speed').value = String(base.miningSpeedMultiplier ?? 1);
+        $('tool-type').value = ['pickaxe', 'axe', 'shovel', 'hoe', 'sword', 'none'].includes(base.toolType) ? base.toolType : 'pickaxe';
+        $('harvest-level').value = String(base.harvestLevel ?? 0);
+        $('max-stack').value = String(base.maxStack ?? 1);
+        $('test-hardness').value = String(definition.miningEstimate && definition.miningEstimate.exampleHardnessSeconds || 3);
+      } else {
+        const base = definition.base || {};
+        $('hardness').value = String(base.hardnessSeconds ?? base.hardness ?? 1);
+        $('unbreakable').value = String(base.unbreakable === true);
+        $('effective-tool').value = ['none', 'pickaxe', 'axe', 'shovel', 'hoe', 'shears'].includes(base.effectiveTool) ? base.effectiveTool : 'none';
+        $('block-tool-speed').value = String(base.toolSpeed ?? 1);
+        $('block-test-tool').value = String(base.estimateUsesEffectiveTool !== false);
+        $('block-stack').value = String(base.maxStack ?? 64);
+        $('drop-item').value = String(base.dropItemId ?? 'self');
+        $('drop-count').value = String(base.dropCount ?? 1);
+        $('solid').value = String(base.solid !== false);
+        $('transparent').value = String(base.transparent === true);
+        $('light').value = String(base.light ?? 0);
+      }
+      const recipe = definition.recipe;
+      $('recipe-type').value = recipe && recipe.type || 'none';
+      $('recipe-result-count').value = String(recipe && recipe.result ? recipe.result.count : 1);
+      $('recipe-station').value = recipe && recipe.station || 'crafting_table';
+      $('recipe-grid-size').value = String(recipe && recipe.gridSize || 3);
+      $('recipe-ingredients').value = recipe && recipe.ingredients
+        ? Object.entries(recipe.ingredients).map(([ingredientId, count]) => ingredientId + ':' + count).join(', ')
+        : '';
+      $('smelt-input').value = String(recipe && recipe.input ? recipe.input.id : 108);
+      $('smelt-seconds').value = String(recipe && recipe.smeltingSeconds || 8);
+      Array.from($('recipe-pattern').children).forEach((input, i) => {
+        const row = recipe && recipe.pattern && recipe.pattern[Math.floor(i / 3)];
+        input.value = String(row && row[i % 3] || 0);
+      });
+      showMesh(importedMesh);
+      $('kind').dispatchEvent(new Event('change'));
+      $('name').value = definition.name || 'Imported item';
+      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
+      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
+      $('registry-key').dataset.edited = 'true';
+      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
+      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
+      updateRecipeFields();
+      render();
+    } finally {
+      applyingEntry = false;
     }
-    packScriptEntries.push({ type: 'service', name });
-    $('service-name').value = '';
+    dirty = false;
+  }
+  function loadDefinition(definition) {
+    if (!definition._studioId) assignStudioId(definition);
+    editing = { bucket: 'definition', id: definition._studioId };
+    applyDefinition(definition);
+    $('editing-banner').textContent = 'Editing ' + (definition.name || 'item') + '. Opening another entry saves this one.';
+  }
+  function loadScript(entry) {
+    if (!entry._studioId) assignStudioId(entry);
+    editing = { bucket: 'script', id: entry._studioId };
+    applyingEntry = true;
+    try {
+      if (entry.type === 'javascript') {
+        packModuleDraft = entry.source || '';
+        $('name').value = entry.name || 'Pack-wide JavaScript';
+        $('pack-script').value = packModuleDraft;
+        $('kind').value = 'javascript';
+        $('kind').dispatchEvent(new Event('change'));
+        $('name').value = entry.name || 'Pack-wide JavaScript';
+        $('pack-script').value = packModuleDraft;
+      } else if (entry.type === 'service') {
+        $('service-name').value = entry.name || '';
+        setEditorMode('service');
+      } else {
+        $('feature-name').value = entry.name || '';
+        $('feature-event').value = ['onChat', 'onTick', 'onPlayerJoin', 'onPlayerLeave'].includes(entry.event) ? entry.event : 'onChat';
+        $('feature-handler').value = entry.handler || '';
+        setEditorMode('feature');
+      }
+    } finally {
+      applyingEntry = false;
+    }
+    dirty = false;
+    const label = entry.type === 'javascript' ? 'JavaScript module' : entry.type;
+    $('editing-banner').textContent = 'Editing ' + label + ' ' + (entry.name || '') + '. Opening another entry saves this one.';
+    if (entry.type === 'service') $('service-editor').scrollIntoView({ block: 'center' });
+    if (entry.type === 'feature') $('feature-editor').scrollIntoView({ block: 'center' });
+  }
+  function openStudioId(id) {
+    if (id === 'draft' || (editing && editing.id === id)) return;
+    const target = packDefinitions.find(entry => entry._studioId === id) ||
+      packScriptEntries.find(entry => entry._studioId === id);
+    if (!target) return;
+    try {
+      const shouldSave = !!(findEditing() || dirty || !blankItem());
+      const savedName = shouldSave ? currentEntryName() : '';
+      if (shouldSave) saveWorkingEntry();
+      if (target.kind === 'tool' || target.kind === 'block') loadDefinition(target);
+      else loadScript(target);
+      renderPack();
+      $('message').textContent = savedName
+        ? 'Saved ' + savedName + '. Now editing ' + (target.name || 'entry') + '.'
+        : 'Now editing ' + (target.name || 'entry') + '.';
+    } catch (error) {
+      $('message').textContent = 'Save the current entry before switching: ' + error.message;
+    }
+  }
+  function startNewEntry() {
+    editing = null;
+    dirty = false;
+    if ($('kind').value !== 'tool' && $('kind').value !== 'block') {
+      applyingEntry = true;
+      $('kind').value = 'tool';
+      lastKind = 'tool';
+      applyingEntry = false;
+    }
+    setEditorMode('item');
+    clearForNextPackItem();
+    $('editing-banner').textContent = 'New entry. It is saved into the pack when you open another entry.';
     renderPack();
-    $('message').textContent = 'JavaScript service reference added. Define it in the pack-wide module under services.';
+  }
+  function closeExplorerMenu() {
+    const menu = $('explorer-menu');
+    if (menu) menu.classList.add('hidden');
+    menuAnchor = null;
+    menuTargetId = null;
+  }
+  function openExplorerMenu(anchor, id) {
+    const menu = $('explorer-menu');
+    menuTargetId = id;
+    menuAnchor = anchor;
+    menu.classList.remove('hidden');
+    const rect = anchor.getBoundingClientRect();
+    const width = menu.offsetWidth || 140;
+    const height = menu.offsetHeight || 42;
+    let left = rect.left - width - 8;
+    if (left < 8) left = Math.min(window.innerWidth - width - 8, rect.right + 8);
+    let top = rect.top;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - height - 8);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  }
+  function deleteStudioId(id) {
+    if (id === 'draft') {
+      dirty = false;
+      editing = null;
+      startNewEntry();
+      $('message').textContent = 'New entry cleared.';
+      return;
+    }
+    const defIndex = packDefinitions.findIndex(entry => entry._studioId === id);
+    if (defIndex >= 0) {
+      finishDelete(packDefinitions.splice(defIndex, 1)[0]);
+      return;
+    }
+    const scriptIndex = packScriptEntries.findIndex(entry => entry._studioId === id);
+    if (scriptIndex < 0) return;
+    const removed = packScriptEntries.splice(scriptIndex, 1)[0];
+    if (removed.type === 'javascript') {
+      packModuleDraft = '';
+      $('pack-script').value = '';
+    }
+    finishDelete(removed);
+  }
+  function finishDelete(removed) {
+    if (editing && editing.id === removed._studioId) {
+      editing = null;
+      dirty = false;
+      startNewEntry();
+    } else {
+      renderPack();
+      updateDefinitionPreview();
+    }
+    $('message').textContent = (removed.name || 'Entry') + ' deleted from the pack.';
+  }
+  function renderExplorer() {
+    closeExplorerMenu();
+    const list = $('explorer-list');
+    if (!list) return;
+    const typeLabels = { tool: 'Tool', block: 'Block', javascript: 'JavaScript', service: 'Service', feature: 'Feature' };
+    const typeBadges = { tool: 'Tl', block: 'Bl', javascript: 'JS', service: 'Sv', feature: 'Ft' };
+    const rows = [];
+    if (!findEditing()) {
+      const kind = editorMode === 'javascript' || $('kind').value === 'javascript'
+        ? 'javascript'
+        : ($('kind').value === 'block' ? 'block' : 'tool');
+      rows.push({
+        id: 'draft',
+        type: editorMode === 'service' ? 'service' : editorMode === 'feature' ? 'feature' : kind,
+        name: currentEntryName(),
+        detail: 'New entry',
+        pixels: editorMode === 'item' ? pixels : null,
+        pixelSize: size,
+        selected: true,
+      });
+    }
+    packDefinitions.forEach(definition => {
+      if (!definition._studioId) assignStudioId(definition);
+      rows.push({
+        id: definition._studioId,
+        type: definition.kind === 'block' ? 'block' : 'tool',
+        name: definition.name || 'Untitled',
+        detail: 'ID ' + (definition.registry && definition.registry.id) + ' · tile ' + (definition.texture && definition.texture.atlasIndex),
+        pixels: definition.sprite && definition.sprite.pixels,
+        pixelSize: definition.sprite && definition.sprite.width,
+        selected: !!(editing && editing.id === definition._studioId),
+      });
+    });
+    packScriptEntries.forEach(entry => {
+      if (!entry._studioId) assignStudioId(entry);
+      let detail = 'Shared module';
+      if (entry.type === 'service') detail = 'services.' + entry.name;
+      if (entry.type === 'feature') detail = (entry.event || 'feature') + ' → ' + (entry.handler || '');
+      rows.push({
+        id: entry._studioId,
+        type: entry.type,
+        name: entry.name || 'Untitled',
+        detail,
+        selected: !!(editing && editing.id === entry._studioId),
+      });
+    });
+    list.replaceChildren();
+    rows.forEach(row => {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'explorer-item' + (row.selected ? ' selected' : '');
+      button.title = 'Right-click to delete';
+      button.setAttribute('aria-label', row.name + ', ' + (typeLabels[row.type] || row.type) + ', ' + row.detail);
+      if (row.type === 'tool' || row.type === 'block') {
+        const thumb = document.createElement('canvas');
+        thumb.className = 'explorer-thumb';
+        const live = row.selected && editorMode === 'item';
+        drawThumb(thumb, live ? pixels : row.pixels, live ? size : row.pixelSize);
+        button.appendChild(thumb);
+      } else {
+        const badge = document.createElement('span');
+        badge.className = 'explorer-badge';
+        badge.textContent = typeBadges[row.type] || '?';
+        button.appendChild(badge);
+      }
+      const copy = document.createElement('span');
+      copy.className = 'explorer-copy';
+      const strong = document.createElement('strong');
+      strong.textContent = row.name;
+      const meta = document.createElement('span');
+      meta.textContent = (typeLabels[row.type] || row.type) + ' · ' + row.detail;
+      copy.append(strong, meta);
+      button.append(copy);
+      button.addEventListener('click', () => openStudioId(row.id));
+      button.addEventListener('contextmenu', event => {
+        event.preventDefault();
+        openExplorerMenu(button, row.id);
+      });
+      item.appendChild(button);
+      list.appendChild(item);
+    });
+  }
+  function renderPack() {
+    const total = packDefinitions.length + packScriptEntries.length;
+    $('pack-count').textContent = total + (total === 1 ? ' entry' : ' entries');
+    $('pack-items').textContent = total
+      ? 'Open an entry in the pack explorer. Switching entries saves the one you are on.'
+      : 'No entries yet. Save an item, or import a pack.';
+    renderExplorer();
+  }
+  function clearForNextPackItem() {
+    const kind = $('kind').value === 'block' ? 'block' : 'tool';
+    pushHistory();
+    pixels = Array(size * size).fill(null);
+    $('name').value = kind === 'block' ? 'New Block' : 'New Tool';
+    try {
+      $('registry-id').value = String(nextFreeId(kind));
+      $('atlas-index').value = String(nextFreeTile());
+    } catch (error) {
+      $('message').textContent = error.message;
+    }
+    $('registry-key').value = fileBaseName($('name').value).replace(/-/g, '_');
+    $('registry-key').dataset.edited = '';
+    $('mechanics').value = '';
+    $('mechanics-notes').value = '';
+    $('recipe-type').value = 'none';
+    $('recipe-ingredients').value = '';
+    Array.from($('recipe-pattern').children).forEach(input => { input.value = '0'; });
+    showMesh(null);
+    canvas.width = canvas.height = size * 32;
+    updateRecipeFields();
+    render();
+  }
+  function migrateLegacyScript(definition) {
+    const oldFeatureHooks = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
+      ? definition.features.source || ''
+      : '';
+    const priorUniqueCode = definition.mechanics && definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
+      ? definition.mechanics.unique || ''
+      : oldFeatureHooks;
+    const priorServices = definition.features && definition.features.runtime === 'coop1.10.javascript-services.v1'
+      ? definition.features.services || ''
+      : '';
+    if (!(priorUniqueCode || priorServices) || packModuleDraft.trim()) return;
+    packModuleDraft = '({items:' + (priorUniqueCode ? '{legacy:(' + priorUniqueCode + ')}' : '{}') +
+      ',services:' + (priorServices || '{}') + ',features:{}})';
+    $('pack-script').value = packModuleDraft;
+    const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
+    if (moduleEntry) moduleEntry.source = packModuleDraft;
+    else packScriptEntries.push(assignStudioId({ type: 'javascript', name: 'Pack-wide JavaScript', source: packModuleDraft }));
+  }
+  function installPack(pack) {
+    if (!pack || !Array.isArray(pack.entries)) throw new Error('This pack has no entries list.');
+    if (pack.entries.length > 256) throw new Error('A pack can contain at most 256 entries.');
+    const source = pack.javascript && typeof pack.javascript.source === 'string' ? pack.javascript.source : '';
+    if (source.length > 1024 * 1024) throw new Error('Pack JavaScript must be 1 MB or smaller.');
+    if (source.trim()) new Function('return (' + source + ');');
+    const definitions = [];
+    const scripts = [];
+    const seenIds = new Set();
+    const seenTiles = new Set();
+    let sawModule = false;
+    for (const entry of pack.entries) {
+      if (!entry || typeof entry !== 'object') throw new Error('Pack contains an empty entry.');
+      if (entry.type === 'item' || entry.type === 'block') {
+        const definition = entry.definition;
+        if (!definition || (definition.kind !== 'tool' && definition.kind !== 'block')) throw new Error('A pack item is missing its definition.');
+        if (entry.type === 'item' && definition.kind !== 'tool') throw new Error((definition.name || 'Item') + ' is marked as an item but is not a tool.');
+        if (entry.type === 'block' && definition.kind !== 'block') throw new Error((definition.name || 'Block') + ' is marked as a block but is not a block.');
+        assertSprite(definition.sprite, definition.name || 'A pack item');
+        const id = definition.registry && definition.registry.id;
+        const tile = definition.texture && definition.texture.atlasIndex;
+        if (seenIds.has(id)) throw new Error('The pack contains duplicate registry ID ' + id + '.');
+        if (seenTiles.has(tile)) throw new Error('The pack contains duplicate atlas tile ' + tile + '.');
+        seenIds.add(id);
+        seenTiles.add(tile);
+        if (definition.mesh && definition.mesh.base64) decodeMesh(definition.mesh);
+        definitions.push(assignStudioId(definition));
+      } else if (entry.type === 'javascript') {
+        if (sawModule) throw new Error('A pack can contain only one JavaScript module.');
+        if (typeof entry.name !== 'string' || !entry.name.trim()) throw new Error('The JavaScript module needs a name.');
+        sawModule = true;
+        scripts.push(assignStudioId({ type: 'javascript', name: entry.name.trim(), source }));
+      } else if (entry.type === 'service') {
+        if (typeof entry.name !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.name) || scripts.some(item => item.type === 'service' && item.name === entry.name)) {
+          throw new Error('The pack contains an invalid or duplicate service name.');
+        }
+        scripts.push(assignStudioId({ type: 'service', name: entry.name }));
+      } else if (entry.type === 'feature') {
+        if (typeof entry.name !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.name) ||
+            typeof entry.handler !== 'string' || !/^[a-zA-Z_$][\w$]*$/.test(entry.handler) ||
+            !['onChat', 'onTick', 'onPlayerJoin', 'onPlayerLeave'].includes(entry.event) ||
+            scripts.some(item => item.type === 'feature' && item.name === entry.name)) {
+          throw new Error('The pack contains an invalid or duplicate feature.');
+        }
+        scripts.push(assignStudioId({ type: 'feature', name: entry.name, event: entry.event, handler: entry.handler }));
+      } else {
+        throw new Error('Unknown pack entry type.');
+      }
+    }
+    if (source.trim() && !sawModule) scripts.unshift(assignStudioId({ type: 'javascript', name: 'Pack-wide JavaScript', source }));
+    packDefinitions.splice(0, packDefinitions.length, ...definitions);
+    packScriptEntries.splice(0, packScriptEntries.length, ...scripts);
+    packModuleDraft = source;
+    $('pack-name').value = typeof pack.name === 'string' && pack.name.trim() ? pack.name : 'Co-op item pack';
+    $('pack-id').value = typeof pack.id === 'string' && pack.id.trim() ? pack.id : 'coop_item_pack';
+    $('pack-script').value = source;
+    editing = null;
+    dirty = false;
+    if (definitions[0]) loadDefinition(definitions[0]);
+    else if (scripts[0]) loadScript(scripts[0]);
+    else startNewEntry();
+    renderPack();
+  }
+  function adoptDefinition(definition) {
+    if (!definition || !['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(definition.schema)) {
+      throw new Error('This is not a supported Co-op item definition.');
+    }
+    assertSprite(definition.sprite, definition.name || 'This item');
+    if (definition.mesh && definition.mesh.base64) decodeMesh(definition.mesh);
+    if (findEditing() || dirty || !blankItem()) saveWorkingEntry();
+    const registryId = definition.registry && definition.registry.id;
+    const existing = packDefinitions.find(entry => entry.registry && entry.registry.id === registryId);
+    if (existing) assignStudioId(definition, existing._studioId);
+    else assignStudioId(definition);
+    if (existing) packDefinitions[packDefinitions.indexOf(existing)] = definition;
+    else packDefinitions.push(definition);
+    migrateLegacyScript(definition);
+    loadDefinition(definition);
+    renderPack();
+    return definition;
+  }
+  function parseStudioFile(text) {
+    let source = text.trim();
+    if (source.charCodeAt(0) === 0xfeff) source = source.slice(1).trim();
+    if (source.startsWith('<') || /id=["']definition-data["']/.test(source)) {
+      const doc = new DOMParser().parseFromString(text, 'text/html');
+      const node = doc.getElementById('definition-data');
+      if (!node || !node.textContent.trim()) throw new Error('This HTML file has no embedded Co-op item definition.');
+      const data = JSON.parse(node.textContent);
+      if (!data || !['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(data.schema)) {
+        throw new Error('The embedded HTML data is not a supported item definition.');
+      }
+      return { kind: 'definition', data };
+    }
+    const data = JSON.parse(source);
+    if (data && ['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(data.schema)) {
+      return { kind: 'definition', data };
+    }
+    const schema = data && typeof data.schema === 'string' ? data.schema : '';
+    if (data && Array.isArray(data.entries) && (schema.includes('item-block-pack') || data.javascript)) {
+      return { kind: 'pack', data };
+    }
+    throw new Error('This file is not a Co-op pack or item definition. Export a pack JSON from this studio and import that file.');
+  }
+  async function importStudioFile(file) {
+    const parsed = parseStudioFile(await file.text());
+    if (parsed.kind === 'pack') {
+      const hasWork = packDefinitions.length > 0 || packScriptEntries.length > 0 || dirty || !blankItem();
+      if (hasWork && !confirm('Replace the open pack with this file?')) return;
+      installPack(parsed.data);
+      const count = packDefinitions.length + packScriptEntries.length;
+      $('message').textContent = 'Pack imported. ' + count + (count === 1 ? ' entry is' : ' entries are') + ' ready to edit.';
+      return;
+    }
+    const definition = adoptDefinition(parsed.data);
+    $('message').textContent = (definition.name || 'Item') + ' imported into the pack.';
+  }
+  $('pack-add').addEventListener('click', saveAndStartNew);
+  $('explorer-new').addEventListener('click', saveAndStartNew);
+  $('pack-add-service').addEventListener('click', () => {
+    try {
+      if (editorMode === 'service') {
+        saveWorkingEntry();
+        renderPack();
+        $('message').textContent = 'Service saved.';
+        return;
+      }
+      const name = $('service-name').value.trim();
+      if (!/^[a-zA-Z_$][\w$]*$/.test(name)) throw new Error('Service name must be a valid JavaScript identifier.');
+      if (packScriptEntries.some(entry => entry.type === 'service' && entry.name === name)) {
+        throw new Error('That JavaScript service is already in the pack.');
+      }
+      packScriptEntries.push(assignStudioId({ type: 'service', name }));
+      $('service-name').value = '';
+      renderPack();
+      $('message').textContent = 'JavaScript service reference added. Define it in the pack-wide module under services.';
+    } catch (error) {
+      $('message').textContent = error.message;
+    }
   });
   $('pack-add-feature').addEventListener('click', () => {
-    const name = $('feature-name').value.trim();
-    const handler = $('feature-handler').value.trim();
-    const event = $('feature-event').value;
-    if (!/^[a-zA-Z_$][\w$]*$/.test(name) || !/^[a-zA-Z_$][\w$]*$/.test(handler)) {
-      $('message').textContent = 'Feature name and handler key must be valid JavaScript identifiers.';
-      return;
+    try {
+      if (editorMode === 'feature') {
+        saveWorkingEntry();
+        renderPack();
+        $('message').textContent = 'Feature saved.';
+        return;
+      }
+      const name = $('feature-name').value.trim();
+      const handler = $('feature-handler').value.trim();
+      const eventName = $('feature-event').value;
+      if (!/^[a-zA-Z_$][\w$]*$/.test(name) || !/^[a-zA-Z_$][\w$]*$/.test(handler)) {
+        throw new Error('Feature name and handler key must be valid JavaScript identifiers.');
+      }
+      if (packScriptEntries.some(entry => entry.type === 'feature' && entry.name === name)) {
+        throw new Error('That feature name is already in the pack.');
+      }
+      packScriptEntries.push(assignStudioId({ type: 'feature', name, event: eventName, handler }));
+      $('feature-name').value = '';
+      $('feature-handler').value = '';
+      renderPack();
+      $('message').textContent = 'Independent feature entry added. Define its handler in the pack-wide module under features.';
+    } catch (error) {
+      $('message').textContent = error.message;
     }
-    if (packScriptEntries.some(entry => entry.type === 'feature' && entry.name === name)) {
-      $('message').textContent = 'That feature name is already in the pack.';
-      return;
-    }
-    packScriptEntries.push({ type: 'feature', name, event, handler });
-    $('feature-name').value = '';
-    $('feature-handler').value = '';
-    renderPack();
-    $('message').textContent = 'Independent feature entry added. Define its handler in the pack-wide module under features.';
   });
   $('pack-remove').addEventListener('click', () => {
-    if (packScriptEntries.length) {
-      const removed = packScriptEntries.pop();
-      if (removed.type === 'javascript') packModuleDraft = '';
-      renderPack();
-      $('message').textContent = removed.name + ' removed from the pack.';
-      updateDefinitionPreview();
-      return;
-    }
-    if (!packDefinitions.length) return;
-    const removed = packDefinitions.pop();
-    renderPack();
-    $('message').textContent = removed.name + ' removed from the pack.';
-    updateDefinitionPreview();
+    const entry = packScriptEntries[packScriptEntries.length - 1] || packDefinitions[packDefinitions.length - 1];
+    if (!entry) return;
+    if (!entry._studioId) assignStudioId(entry);
+    deleteStudioId(entry._studioId);
   });
   $('pack-clear').addEventListener('click', () => {
     packDefinitions.length = 0;
     packScriptEntries.length = 0;
     packModuleDraft = '';
     $('pack-script').value = '';
-    renderPack();
+    editing = null;
+    dirty = false;
+    startNewEntry();
     $('message').textContent = 'Pack cleared.';
-    updateDefinitionPreview();
   });
+  $('import-pack').addEventListener('click', () => $('import-file').click());
+  $('explorer-import').addEventListener('click', () => $('import-file').click());
+  $('explorer-delete').addEventListener('click', () => {
+    const id = menuTargetId;
+    closeExplorerMenu();
+    if (id == null) return;
+    deleteStudioId(id);
+  });
+  $('explorer-menu').addEventListener('mouseleave', event => {
+    if (menuAnchor && event.relatedTarget && (event.relatedTarget === menuAnchor || menuAnchor.contains(event.relatedTarget))) return;
+    closeExplorerMenu();
+  });
+  document.addEventListener('pointermove', event => {
+    if (!menuAnchor || $('explorer-menu').classList.contains('hidden')) return;
+    const menuRect = $('explorer-menu').getBoundingClientRect();
+    const anchorRect = menuAnchor.getBoundingClientRect();
+    const left = Math.min(menuRect.left, anchorRect.left) - 12;
+    const right = Math.max(menuRect.right, anchorRect.right) + 12;
+    const top = Math.min(menuRect.top, anchorRect.top) - 12;
+    const bottom = Math.max(menuRect.bottom, anchorRect.bottom) + 12;
+    if (event.clientX < left || event.clientX > right || event.clientY < top || event.clientY > bottom) closeExplorerMenu();
+  });
+  window.addEventListener('scroll', () => {
+    if (!$('explorer-menu').classList.contains('hidden')) closeExplorerMenu();
+  }, true);
+
   $('download-pack').addEventListener('click', () => {
     try {
+      saveWorkingEntry();
+      renderPack();
       const moduleEntry = packScriptEntries.find(entry => entry.type === 'javascript');
-      const javascript = moduleEntry ? moduleEntry.source.trim() : '';
+      const javascript = moduleEntry && typeof moduleEntry.source === 'string' ? moduleEntry.source.trim() : '';
       if (!packDefinitions.length && !packScriptEntries.length) throw new Error('Add at least one entry to the pack first.');
       const needsModule = packDefinitions.some(definition => definition.mechanics && definition.mechanics.unique) ||
         packScriptEntries.some(entry => entry.type === 'service' || entry.type === 'feature');
@@ -944,9 +1680,11 @@
         name: $('pack-name').value.trim() || 'Co-op item pack',
         entries: [
           ...packDefinitions.map(definition => ({ type: definition.kind === 'tool' ? 'item' : 'block', definition })),
-          ...packScriptEntries.map(entry => entry.type === 'javascript'
-            ? { type: 'javascript', name: entry.name }
-            : entry),
+          ...packScriptEntries.map(entry => {
+            if (entry.type === 'javascript') return { type: 'javascript', name: entry.name };
+            if (entry.type === 'service') return { type: 'service', name: entry.name };
+            return { type: 'feature', name: entry.name, event: entry.event, handler: entry.handler };
+          }),
         ],
         javascript: { runtime: 'coop1.10.pack-javascript.v1', source: javascript },
       };
@@ -981,130 +1719,7 @@
     event.target.value = '';
     if (!file) return;
     try {
-      const definition = JSON.parse(await file.text());
-      if (!definition || !['coop1.10.item-block-definition.v1', 'coop1.10.item-block-definition.v2'].includes(definition.schema)) {
-        throw new Error('This is not a supported Co-op item definition JSON file.');
-      }
-      if (!definition.sprite || !Array.isArray(definition.sprite.pixels) ||
-          ![16, 32, 64].includes(definition.sprite.width) ||
-          definition.sprite.height !== definition.sprite.width ||
-          definition.sprite.pixels.length !== definition.sprite.width * definition.sprite.width ||
-          !definition.sprite.pixels.every(pixel => pixel === null || (typeof pixel === 'string' && /^#[0-9a-f]{6}$/i.test(pixel)))) {
-        throw new Error('The definition has invalid sprite pixel data.');
-      }
-      let importedMesh = null;
-      if (definition.mesh && definition.mesh.base64) {
-        const raw = atob(definition.mesh.base64);
-        if (raw.length > MAX_MESH_BYTES || raw.length < 12) throw new Error('The embedded mesh has an invalid size.');
-        const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
-        const header = new DataView(bytes.buffer);
-        if (header.getUint32(0, true) !== 0x46546c67 || header.getUint32(4, true) !== 2) {
-          throw new Error('The embedded mesh is not a valid binary glTF 2.0 file.');
-        }
-        importedMesh = { bytes, base64: definition.mesh.base64, name: definition.mesh.fileName || 'imported.glb' };
-      }
-      pushHistory();
-      size = definition.sprite.width;
-      $('size').value = String(size);
-      canvas.width = canvas.height = size * 32;
-      pixels = definition.sprite.pixels.slice();
-      $('name').value = definition.name || 'Imported item';
-      $('kind').value = definition.kind === 'block' ? 'block' : 'tool';
-      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
-      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
-      $('registry-key').dataset.edited = 'true';
-      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
-      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
-      const oldFeatureHooks = definition.features && definition.features.runtime === 'coop1.10.javascript-feature.v1'
-        ? definition.features.source || ''
-        : '';
-      const priorUniqueCode = definition.mechanics &&
-        definition.mechanics.uniqueRuntime === 'coop1.10.javascript-feature.v2'
-        ? definition.mechanics.unique || ''
-        : oldFeatureHooks;
-      $('mechanics-notes').value = definition.mechanics &&
-        (definition.mechanics.description || (definition.mechanics.uniqueRuntime !== 'coop1.10.javascript-feature.v2'
-          ? definition.mechanics.unique
-          : '')) || '';
-      $('mechanics').value = definition.mechanics &&
-        definition.mechanics.uniqueRuntime === 'coop1.10.pack-hook-ref.v1'
-        ? definition.mechanics.unique || ''
-        : priorUniqueCode ? 'legacy' : '';
-      const priorServices = definition.features && definition.features.runtime === 'coop1.10.javascript-services.v1'
-        ? definition.features.services || ''
-        : '';
-      $('pack-script').value = priorUniqueCode || priorServices
-        ? '({items:' + (priorUniqueCode ? '{legacy:(' + priorUniqueCode + ')}' : '{}') +
-          ',services:' + (priorServices || '{}') + ',features:{}})'
-        : '';
-      if (definition.kind === 'tool') {
-        const b = definition.base || {};
-        $('damage').value = String(b.damage ?? 4);
-        $('cooldown').value = String(b.cooldownSeconds ?? 0.55);
-        $('knockback').value = String(b.knockbackMultiplier ?? 1);
-        $('reach').value = String(b.reachBlocks ?? 4);
-        $('durability').value = String(b.durabilityUses ?? 100);
-        $('mining-speed').value = String(b.miningSpeedMultiplier ?? 1);
-        $('tool-type').value = ['pickaxe','axe','shovel','hoe','sword','none'].includes(b.toolType) ? b.toolType : 'pickaxe';
-        $('harvest-level').value = String(b.harvestLevel ?? 0);
-        $('max-stack').value = String(b.maxStack ?? 1);
-        $('test-hardness').value = String(definition.miningEstimate && definition.miningEstimate.exampleHardnessSeconds || 3);
-      } else {
-        const b = definition.base || {};
-        $('hardness').value = String(b.hardnessSeconds ?? b.hardness ?? 1);
-        $('unbreakable').value = String(b.unbreakable === true);
-        $('effective-tool').value = ['none','pickaxe','axe','shovel','hoe','shears'].includes(b.effectiveTool) ? b.effectiveTool : 'none';
-        $('block-tool-speed').value = String(b.toolSpeed ?? 1);
-        $('block-test-tool').value = String(b.estimateUsesEffectiveTool !== false);
-        $('block-stack').value = String(b.maxStack ?? 64);
-        $('drop-item').value = String(b.dropItemId ?? 'self');
-        $('drop-count').value = String(b.dropCount ?? 1);
-        $('solid').value = String(b.solid !== false);
-        $('transparent').value = String(b.transparent === true);
-        $('light').value = String(b.light ?? 0);
-      }
-      const recipe = definition.recipe;
-      $('recipe-type').value = recipe ? recipe.type : 'none';
-      $('recipe-result-count').value = String(recipe && recipe.result ? recipe.result.count : 1);
-      $('recipe-station').value = recipe && recipe.station || 'crafting_table';
-      $('recipe-grid-size').value = String(recipe && recipe.gridSize || 3);
-      $('recipe-ingredients').value = recipe && recipe.ingredients
-        ? Object.entries(recipe.ingredients).map(([ingredientId, count]) => ingredientId + ':' + count).join(', ')
-        : '';
-      $('smelt-input').value = String(recipe && recipe.input ? recipe.input.id : 108);
-      $('smelt-seconds').value = String(recipe && recipe.smeltingSeconds || 8);
-      Array.from($('recipe-pattern').children).forEach((input, i) => {
-        const row = recipe && recipe.pattern && recipe.pattern[Math.floor(i / 3)];
-        input.value = String(row && row[i % 3] || 0);
-      });
-      $('kind').dispatchEvent(new Event('change'));
-      $('registry-id').value = String(definition.registry && definition.registry.id || ($('kind').value === 'tool' ? 120 : 30));
-      $('registry-key').value = definition.registry && definition.registry.key || fileBaseName($('name').value).replace(/-/g, '_');
-      $('category').value = definition.registry && definition.registry.category || ($('kind').value === 'tool' ? 'tools' : 'building');
-      $('atlas-index').value = String(definition.texture && definition.texture.atlasIndex >= 54 && definition.texture.atlasIndex <= 127 ? definition.texture.atlasIndex : 54);
-      updateRecipeFields();
-      if (importedMesh) {
-        const bytes = importedMesh.bytes;
-        if (meshUrl) URL.revokeObjectURL(meshUrl);
-        mesh = { name: importedMesh.name, bytes: bytes.buffer, base64: importedMesh.base64 };
-        meshUrl = URL.createObjectURL(new Blob([bytes], { type: 'model/gltf-binary' }));
-        $('mesh-info').textContent = mesh.name + ' · ' + (bytes.length / 1024 / 1024).toFixed(2) + ' MB · embedded in HTML export';
-        $('remove-mesh').classList.remove('hidden');
-        $('mesh-view').src = meshUrl;
-        $('mesh-view').classList.remove('hidden');
-      } else {
-        mesh = null;
-        if (meshUrl) URL.revokeObjectURL(meshUrl);
-        meshUrl = null;
-        $('mesh-view').removeAttribute('src');
-        $('mesh-view').classList.add('hidden');
-        $('mesh-info').textContent = 'No mesh imported.';
-        $('remove-mesh').classList.add('hidden');
-      }
-      render();
-      $('message').textContent = 'Definition imported into the editor.';
-      renderPack();
-      updateDefinitionPreview();
+      await importStudioFile(file);
     } catch (error) {
       $('message').textContent = 'Import failed: ' + error.message;
     }

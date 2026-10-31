@@ -5539,6 +5539,11 @@ function createCustomFeatureRunner(pack) {
         world: Object.freeze({
           setBlock: (x, y, z, id) => push('world', 'setBlock', [x, y, z, id]),
           spawnDrop: (x, y, z, id, count = 1) => push('world', 'spawnDrop', [x, y, z, id, count]),
+          getBlock: (x, y, z) => {
+            const key = Math.floor(x) + ',' + Math.floor(y) + ',' + Math.floor(z);
+            const id = data.context.blocks && data.context.blocks[key];
+            return Number.isInteger(id) ? id : 0;
+          },
           setTime: hours => push('world', 'setTime', [hours]),
           time: data.context.world.time,
         }),
@@ -5553,10 +5558,15 @@ function createCustomFeatureRunner(pack) {
           heal: amount => push('player', 'heal', [amount]),
           damage: amount => push('player', 'damage', [amount]),
           addVelocity: (x, y, z) => push('player', 'addVelocity', [x, y, z]),
+          teleport: (x, y, z) => push('player', 'teleport', [x, y, z]),
+        }),
+        chat: Object.freeze({
+          send: text => push('effects', 'chat', [text]),
         }),
         effects: Object.freeze({
           playSound: name => push('effects', 'playSound', [name]),
           particle: (name, x, y, z) => push('effects', 'particle', [name, x, y, z]),
+          shake: amount => push('effects', 'shake', [amount]),
         }),
       };
       api.services = Object.freeze(Object.fromEntries(Object.entries(module.services).map(([name, service]) =>
@@ -5727,22 +5737,16 @@ function dispatchCustomPackEventQueue(pack) {
   customPackEventBusy.add(pack.id);
   (async () => {
     for (const entry of next.entries) {
+      const actor = localPackPlayer();
       const response = await callPackFeature(pack, entry, {
         ...next.event,
-        player: {
-          id: NET.selfId, name: NET.name || getPlayerName(), health,
-          dead: health <= 0, gameMode,
-          position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
-        },
-        players: [
-          { id: NET.selfId, name: NET.name || getPlayerName(), health, dead: health <= 0,
-            position: { x: player.pos.x, y: player.pos.y, z: player.pos.z } },
-          ...[...remotePlayers.values()].map(other => ({
-            id: other.id, name: other.name, health: other.health, dead: other.dead,
-            position: { x: other.tx, y: other.ty, z: other.tz },
-          })),
-        ],
+        ...(next.event.senderPlayer ? { senderPlayer: packPlayer(next.event.senderPlayer) } : {}),
+        ...(next.event.joinedPlayer ? { joinedPlayer: packPlayer(next.event.joinedPlayer) } : {}),
+        ...(next.event.leavingPlayer ? { leavingPlayer: packPlayer(next.event.leavingPlayer) } : {}),
+        player: actor,
+        players: [actor, ...[...remotePlayers.values()].map(remotePackPlayer)],
         world: { time: worldTime * 24 },
+        blocks: nearbyBlockSnapshot(),
       });
       if (response) applyCustomFeatureActions({
         registry: { id: pack.id }, packId: pack.id, name: pack.name,
@@ -5850,8 +5854,24 @@ function applyCustomFeatureActions(definition, actions) {
             Math.abs(a) > 20 || Math.abs(b) > 20 || Math.abs(c) > 20) break;
         player.vel.x += a; player.vel.y += b; player.vel.z += c;
         break;
+      case 'teleport':
+        if (!capabilities.has('player') || !validPosition(a, b, c) ||
+            !inBounds2(Math.floor(a), Math.floor(b), Math.floor(c))) break;
+        if (isSolid(getBlock(Math.floor(a), Math.floor(b), Math.floor(c))) ||
+            isSolid(getBlock(Math.floor(a), Math.floor(b) + 1, Math.floor(c)))) break;
+        player.pos.set(a, b, c);
+        player.vel.set(0, 0, 0);
+        break;
       case 'playSound':
         if (capabilities.has('effects') && typeof a === 'string' && Object.prototype.hasOwnProperty.call(SFX, a)) playSFX(a);
+        break;
+      case 'chat':
+        if (!capabilities.has('effects') || typeof a !== 'string') break;
+        chatLine('', String(a).replace(/[\r\n]/g, ' ').slice(0, 120), true);
+        break;
+      case 'shake':
+        if (!capabilities.has('effects') || !Number.isFinite(a)) break;
+        shakeAmount = Math.min(0.25, shakeAmount + Math.max(0, Math.min(1, a)) * 0.2);
         break;
       case 'particle':
         if (!capabilities.has('effects') || typeof a !== 'string' || !validPosition(b, c, d)) break;
@@ -5866,34 +5886,69 @@ function applyCustomFeatureActions(definition, actions) {
   renderHotbar();
   if (inventoryOpen) renderInventory();
 }
+function lookFromAngles(yawAngle, pitchAngle) {
+  const y = Number.isFinite(yawAngle) ? yawAngle : 0;
+  const p = Number.isFinite(pitchAngle) ? pitchAngle : 0;
+  return {
+    x: -Math.sin(y) * Math.cos(p),
+    y: Math.sin(p),
+    z: -Math.cos(y) * Math.cos(p),
+  };
+}
+function packPlayer(raw) {
+  const yawAngle = Number.isFinite(raw.yaw) ? raw.yaw : 0;
+  const pitchAngle = Number.isFinite(raw.pitch) ? raw.pitch : 0;
+  return {
+    id: raw.id, name: raw.name, position: raw.position,
+    health: raw.health, dead: !!raw.dead, gameMode: raw.gameMode,
+    isOperator: raw.isOperator, yaw: yawAngle, pitch: pitchAngle,
+    yawDegrees: yawAngle * 180 / Math.PI,
+    pitchDegrees: pitchAngle * 180 / Math.PI,
+    look: lookFromAngles(yawAngle, pitchAngle),
+  };
+}
+function localPackPlayer() {
+  return packPlayer({
+    id: NET.selfId, name: NET.name || getPlayerName(),
+    position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
+    health, dead: health <= 0, gameMode, isOperator: NET.isOp, yaw, pitch,
+  });
+}
+function remotePackPlayer(other) {
+  return packPlayer({
+    id: other.id, name: other.name,
+    position: { x: other.tx, y: other.ty, z: other.tz },
+    health: other.health, dead: other.dead, yaw: other.tyaw, pitch: other.tpitch,
+  });
+}
+function nearbyBlockSnapshot() {
+  const blocks = {};
+  const radius = 5;
+  const ox = Math.floor(player.pos.x), oy = Math.floor(player.pos.y), oz = Math.floor(player.pos.z);
+  for (let y = oy - radius; y <= oy + radius; y++) {
+    for (let z = oz - radius; z <= oz + radius; z++) {
+      for (let x = ox - radius; x <= ox + radius; x++) {
+        if (!inBounds2(x, y, z)) continue;
+        const id = getBlock(x, y, z);
+        if (id) blocks[x + ',' + y + ',' + z] = id;
+      }
+    }
+  }
+  return blocks;
+}
 async function runCustomFeatureHook(definition, hook, context, hookRef = null) {
   try {
-    const actor = {
-      id: NET.selfId,
-      name: NET.name || getPlayerName(),
-      position: { x: player.pos.x, y: player.pos.y, z: player.pos.z },
-      health,
-      dead: health <= 0,
-      gameMode,
-      isOperator: NET.isOp,
-      yaw,
-      pitch,
-    };
+    const actor = localPackPlayer();
     const response = await callCustomFeatureHook(definition, hook, {
       ...context,
+      ...(hook === 'onUse' ? { user: actor } : {}),
       ...(context.type === 'block-use' ? { clickedBy: actor } : {}),
+      ...(context.attackedPlayer ? { attackedPlayer: packPlayer(context.attackedPlayer) } : {}),
       item: { id: definition.registry.id, name: definition.name, kind: definition.kind },
       player: actor,
-      players: [
-        actor,
-        ...[...remotePlayers.values()].map(other => ({
-          id: other.id, name: other.name,
-          position: { x: other.tx, y: other.ty, z: other.tz },
-          health: other.health, dead: other.dead,
-          yaw: other.tyaw, pitch: other.tpitch,
-        })),
-      ],
+      players: [actor, ...[...remotePlayers.values()].map(remotePackPlayer)],
       world: { time: worldTime * 24 },
+      blocks: nearbyBlockSnapshot(),
       rayHits: getCustomRayTraceHits(64, 64),
     }, hookRef);
     if (!response) return null;
@@ -6069,6 +6124,7 @@ function updateCustomProjectiles(dt) {
           id: other.id, name: other.name,
           position: { x: other.tx, y: other.ty, z: other.tz },
           health: other.health, dead: other.dead,
+          yaw: other.tyaw, pitch: other.tpitch,
         },
         position,
       }, projectile.hookRef);
@@ -6145,10 +6201,11 @@ function getCustomRayTraceHits(maxDistance = 64, maxHits = 64, origin = camera.p
         y: origin.y + dir.y * playerDistance,
         z: origin.z + dir.z * playerDistance,
       },
-      player: {
+      player: packPlayer({
         id: other.id, name: other.name, health: other.health, dead: other.dead,
         position: { x: other.tx, y: other.ty, z: other.tz },
-      },
+        yaw: other.tyaw, pitch: other.tpitch,
+      }),
     });
   }
   return hits.sort((a, b) => a.distance - b.distance).slice(0, maxHits);
@@ -7835,6 +7892,7 @@ async function requestPvpAttack(targetId) {
         id: target.id, name: target.name,
         position: { x: target.tx, y: target.ty, z: target.tz },
         health: target.health, dead: target.dead,
+        yaw: target.tyaw, pitch: target.tpitch,
       } : null,
     });
     if (result && typeof result === 'object') {

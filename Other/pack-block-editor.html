@@ -66,7 +66,7 @@
     font-weight: 700;
     text-align: left;
     white-space: nowrap;
-    box-shadow: 0 2px 0 rgba(0,0,0,.18);
+    box-shadow: none;
     cursor: grab;
     user-select: none;
     touch-action: none;
@@ -83,7 +83,7 @@
     border-radius: 0 0 6px 6px;
     z-index: 3;
   }
-  .sb-stack { margin-top: calc(-1 * var(--notch-h) + 1px); padding-top: 10px; }
+  .sb-stack { margin-top: calc(-1 * var(--notch-h)); padding-top: 12px; }
   .sb-stack::before {
     content: "";
     position: absolute;
@@ -95,14 +95,16 @@
     border-radius: 0 0 6px 6px;
     z-index: 4;
   }
-  .sb-hat { margin-top: 0; padding-top: 14px; border-radius: 18px 18px 4px 4px; flex-wrap: wrap; max-width: 720px; row-gap: 6px; white-space: normal; }
+  .sb-hat { margin-top: 0; padding: 12px 12px 10px; border-radius: 16px 16px 4px 4px; flex-direction: column; align-items: stretch; flex-wrap: nowrap; max-width: 520px; gap: 6px; white-space: normal; }
+  .hat-title, .hat-values { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .hat-values { padding: 4px; background: rgba(0,0,0,.16); border-radius: 12px; }
   .sb-c { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; padding: 8px 8px 0; white-space: normal; width: auto; }
   .sb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; padding: 0 6px 6px 2px; white-space: normal; }
   .sb-mouth {
     --behind: color-mix(in srgb, var(--sb) 68%, #000);
     min-height: 36px;
-    margin: 0 2px 0 16px;
-    padding: 16px 4px 12px;
+    margin: 0 2px 0 14px;
+    padding: 8px 6px 8px 8px;
     background: var(--behind);
     border-radius: 0 8px 8px 0;
   }
@@ -112,7 +114,8 @@
   .sb input.cmp { width: 92px; max-width: 110px; }
   .wide { max-width: 180px !important; }
   .sb-x { margin-left: auto; width: 18px; height: 18px; color: #fff; background: rgba(0,0,0,.18); border: 0; border-radius: 50%; cursor: pointer; flex-shrink: 0; }
-  .script { position: absolute; min-width: 220px; padding: 0; cursor: grab; }
+  .script { position: absolute; display: flex; flex-direction: column; align-items: flex-start; min-width: 220px; padding: 0; cursor: grab; filter: drop-shadow(0 3px 0 rgba(0,0,0,.16)); }
+  .sb-mouth > .sb-stack:first-child { margin-top: 0; }
   .script:active { cursor: grabbing; }
   .script.drop-on { outline: 3px solid #4c97ff; outline-offset: 6px; }
   .script.dragging { opacity: .55; pointer-events: none; }
@@ -225,8 +228,14 @@ const PLAYER_PARTS = [
   part("position.x", "x", ["value"]),
   part("position.y", "y", ["value"]),
   part("position.z", "z", ["value"]),
-  part("yaw", "yaw", ["value"]),
-  part("pitch", "pitch", ["value"]),
+  part("look", "looking", ["pos"], { posPath: "look" }),
+  part("look.x", "look x", ["value"]),
+  part("look.y", "look y", ["value"]),
+  part("look.z", "look z", ["value"]),
+  part("yawDegrees", "yaw", ["value"]),
+  part("pitchDegrees", "pitch", ["value"]),
+  part("yaw", "yaw rad", ["value"]),
+  part("pitch", "pitch rad", ["value"]),
   part("gameMode", "mode", ["value"], { str: true })
 ];
 const POS_PARTS = [
@@ -295,6 +304,12 @@ const KINDS = {
     part("position.x", "x", ["value"], { path: "player.position.x" }),
     part("position.y", "y", ["value"], { path: "player.position.y" }),
     part("position.z", "z", ["value"], { path: "player.position.z" }),
+    part("look", "looking", ["pos"], { path: "player.look", posPath: "player.look" }),
+    part("look.x", "look x", ["value"], { path: "player.look.x" }),
+    part("look.y", "look y", ["value"], { path: "player.look.y" }),
+    part("look.z", "look z", ["value"], { path: "player.look.z" }),
+    part("yawDegrees", "yaw", ["value"], { path: "player.yawDegrees" }),
+    part("pitchDegrees", "pitch", ["value"], { path: "player.pitchDegrees" }),
     part("hit", "hit position", ["pos"], { path: "position", posPath: "position" }),
     part("distance", "distance", ["value"], { path: "distance" })
   ] },
@@ -320,10 +335,13 @@ const ACTIONS = [
   ["heal", "heal", "motion", "#4c97ff"],
   ["damage", "damage", "motion", "#4c97ff"],
   ["velocity", "push", "motion", "#4c97ff"],
+  ["teleport", "go to", "motion", "#4c97ff"],
   ["giveItem", "give item", "looks", "#9966ff"],
   ["setBlock", "set block", "looks", "#9966ff"],
   ["spawnDrop", "drop item", "looks", "#9966ff"],
   ["setTime", "set time", "looks", "#9966ff"],
+  ["say", "say", "looks", "#9966ff"],
+  ["shake", "shake", "looks", "#9966ff"],
   ["launch", "launch projectile", "looks", "#9966ff"],
   ["rayIf", "if looking at", "sensing", "#5cb1d6"],
   ["if", "if <> then", "control", "#ffab19"],
@@ -372,6 +390,7 @@ function fieldsFor(kind, script) {
 }
 function refLabel(ref) {
   if (!ref) return "variable";
+  if (ref.expr === "block") return "block id";
   if (ref.expr === "math") {
     const spec = MATH.find((row) => row[0] === ref.op);
     return spec ? spec[1] : "math";
@@ -419,7 +438,7 @@ function typeName(type) {
 }
 function refType(ref) {
   if (!ref || typeof ref !== "object") return null;
-  if (ref.expr === "math") return "num";
+  if (ref.expr === "math" || ref.expr === "block") return "num";
   if (ref.kind === "xyz") return "pos";
   const field = fieldDef(ref.kind, ref.field);
   if (!field) return null;
@@ -436,6 +455,7 @@ function accepts(slot, stmt) {
   if (top === "who") return ["who"];
   if (top === "pos" && path.indexOf(".") < 0) return ["pos"];
   if (top === "cmp" || top === "value") return ["num", "str", "bool"];
+  if (top === "text") return ["str"];
   if (top === "right") {
     const type = stmt && exprType(stmt.cmp);
     return type ? [type] : ["num", "str", "bool"];
@@ -452,7 +472,7 @@ function refFits(ref, slot, script, stmtId) {
   const stmt = located && located.stmt;
   if (!typesMatch(ref, slot, stmt)) return false;
   if (script.kind === "loose") return false;
-  if (ref.expr === "math" || ref.kind === "xyz") return true;
+  if (ref.expr === "math" || ref.expr === "block" || ref.kind === "xyz") return true;
   if (!ref.producer || ref.producer === "hat") {
     if (hatVars(script).indexOf(ref.kind) < 0) return false;
     return fieldsFor(ref.kind, script).some((entry) => entry.id === (ref.field || ""));
@@ -481,6 +501,9 @@ function fresh(kind) {
   if (kind === "particle") return { id, kind, particle: "smoke", pos: null };
   if (kind === "heal" || kind === "damage") return { id, kind, amount: "2", who: null };
   if (kind === "velocity") return { id, kind, x: "0", y: "0.8", z: "0", who: null };
+  if (kind === "teleport") return { id, kind, who: null, pos: null };
+  if (kind === "say") return { id, kind, text: "hello" };
+  if (kind === "shake") return { id, kind, amount: "0.4" };
   if (kind === "giveItem") return { id, kind, itemId: "120", count: "1", who: null };
   if (kind === "setBlock") return { id, kind, blockId: "1", pos: null };
   if (kind === "spawnDrop") return { id, kind, itemId: "120", count: "1", pos: null };
@@ -657,6 +680,7 @@ function valueExpr(ref) {
 function numExpr(value, script, stmtId) {
   if (value && typeof value === "object") {
     if (value.expr === "math") return mathCode(value, script, stmtId);
+    if (value.expr === "block") return blockAtCode(value, script, stmtId);
     if (exprType(value) !== "num" || !refFits(value, "num", script, stmtId)) return "0";
     return valueExpr(value);
   }
@@ -684,6 +708,12 @@ function mathCode(expr, script, stmtId) {
   if (op === "tan") return "Math.tan((" + a + ") * Math.PI / 180)";
   if (op === "random") return "(" + a + " + Math.random() * (" + b + " - " + a + "))";
   return "0";
+}
+function blockAtCode(expr, script, stmtId) {
+  const pos = expr && expr.pos;
+  if (!pos || typeof pos !== "object" || !refFits(pos, "pos", script, stmtId)) return "0";
+  const p = posExpr(pos, script, stmtId);
+  return "api.world.getBlock(" + p[0] + ", " + p[1] + ", " + p[2] + ")";
 }
 function scalarExpr(value, script, stmtId, type) {
   if (value && typeof value === "object") {
@@ -775,6 +805,16 @@ function emitStmt(stmt, indent, script) {
     if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
     return n + "if (" + whoExpr(who) + ") api.player." + api + "(" + numExpr(stmt.amount, script, stmt.id) + ");\n";
   }
+  if (stmt.kind === "teleport") {
+    const who = slotReady(stmt, "who", script);
+    const pos = slotReady(stmt, "pos", script);
+    if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
+    if (!pos) return n + (pos === false ? "/* position variable is not available here */\n" : "/* drop a position variable */\n");
+    const p = posExpr(pos, script, stmt.id);
+    return n + "if (" + whoExpr(who) + ") api.player.teleport(" + p[0] + ", " + p[1] + ", " + p[2] + ");\n";
+  }
+  if (stmt.kind === "say") return n + "api.chat.send(" + scalarExpr(stmt.text, script, stmt.id, "str") + ");\n";
+  if (stmt.kind === "shake") return n + "api.effects.shake(" + numExpr(stmt.amount, script, stmt.id) + ");\n";
   if (stmt.kind === "velocity") {
     const who = slotReady(stmt, "who", script);
     if (!who) return n + (who === false ? "/* player variable is not available here */\n" : "/* drop a player variable */\n");
@@ -1217,7 +1257,7 @@ function copyExpr(value) {
 function emptySlot(path) {
   const top = String(path || "").split(".")[0];
   if (top === "who" || top === "pos" || top === "cmp" || top === "value") return null;
-  if (top === "right") return "";
+  if (top === "right" || top === "text") return "";
   return "0";
 }
 function freshMath(op) {
@@ -1361,12 +1401,20 @@ function shownField(kind, picked, script) {
   if (fields.some((field) => field.id === "")) return "";
   return (fields[0] || { id: "" }).id;
 }
+function displayLabel(ref, script) {
+  if (ref && ref.kind === "player" && script && scriptEvent(script) === "onUse") {
+    const field = fieldDef(ref.kind, ref.field);
+    return !field || !field.id ? "user" : "user · " + field.label;
+  }
+  return refLabel(ref);
+}
 function sourceChip(kind, field, onField, producer, script) {
   const ref = { kind, field: field || "" };
+  const used = kind === "player" && script && scriptEvent(script) === "onUse";
   const chip = el("span", {
     class: "reporter",
-    title: "Drag into a round slot. Double-click for position, health, and other parts."
-  }, [refLabel(ref)]);
+    title: used ? "The player who used this item. Double-click for yaw, pitch, and look direction." : "Drag into a round slot. Double-click for position, health, and other parts."
+  }, [displayLabel(ref, script)]);
   chip.addEventListener("dblclick", (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1394,7 +1442,7 @@ function reporterChip(value, slot, script, stmtId) {
   const chip = el("span", {
     class: "reporter" + (bad ? " bad" : ""),
     title: bad ? grayReason(value, slot, script, stmtId) : "Double-click for parts this slot can use"
-  }, [refLabel(value)]);
+  }, [displayLabel(value, script)]);
   const found = locate(stmtId);
   const stmt = found && found.stmt;
   if (value.kind === "xyz" && stmt) {
@@ -1439,8 +1487,16 @@ function mathChip(expr, path, script, stmtId) {
   else chip.append(a, spec[1], b);
   return bindDrag(chip, { type: "var", value: copyExpr(expr), fromId: stmtId, fromSlot: path }, true);
 }
+function blockChip(expr, path, script, stmtId) {
+  const found = locate(stmtId);
+  const stmt = found && found.stmt;
+  const chip = el("span", { class: "reporter", title: "Block id at a position. Drop into a number slot." }, ["block id at"]);
+  if (stmt) chip.append(exprSocket(stmt, path + ".pos", script, ["pos"]));
+  return bindDrag(chip, { type: "var", value: copyExpr(expr), fromId: stmtId, fromSlot: path }, true);
+}
 function exprChip(value, path, script, stmtId) {
   if (value && value.expr === "math") return mathChip(value, path, script, stmtId);
+  if (value && value.expr === "block") return blockChip(value, path, script, stmtId);
   return reporterChip(value, path, script, stmtId);
 }
 function exprSocket(stmt, path, script, types) {
@@ -1451,11 +1507,11 @@ function exprSocket(stmt, path, script, types) {
   else if (list.length === 1 && list[0] === "num") node.append(bubble(value == null || value === "" ? "0" : value, (raw) => setPath(stmt.id, path, raw)));
   else if (list.length === 1 && list[0] === "str") node.append(bubble(value == null ? "" : value, (raw) => setPath(stmt.id, path, raw), "cmp"));
   else if (list.length === 1 && list[0] === "bool") node.append(menu(value === true || value === "true" ? "true" : "false", [["true", "true"], ["false", "false"]], (raw) => { setPath(stmt.id, path, raw); render(); }));
-  else if (path === "pos") {
+  else if (list.length === 1 && list[0] === "pos") {
     node.append(el("button", { class: "mini", type: "button", title: "Type x y z", onclick: (e) => {
       e.stopPropagation();
       snapshot();
-      setFields(stmt.id, { pos: { kind: "xyz", x: "0", y: "0", z: "0" } });
+      setPath(stmt.id, path, { kind: "xyz", x: "0", y: "0", z: "0" });
       render();
     } }, ["123"]));
   }
@@ -1470,6 +1526,9 @@ function paintFields(stmt, row, script) {
   if (stmt.kind === "heal") row.append("heal", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
   if (stmt.kind === "damage") row.append("damage", socketNode(stmt, "who", script), "by", numSocket(stmt, "amount", script));
   if (stmt.kind === "velocity") row.append("push", socketNode(stmt, "who", script), "x", numSocket(stmt, "x", script), "y", numSocket(stmt, "y", script), "z", numSocket(stmt, "z", script));
+  if (stmt.kind === "teleport") row.append("move", socketNode(stmt, "who", script), "to", socketNode(stmt, "pos", script));
+  if (stmt.kind === "say") row.append("say", exprSocket(stmt, "text", script, ["str"]));
+  if (stmt.kind === "shake") row.append("shake camera", numSocket(stmt, "amount", script));
   if (stmt.kind === "giveItem") row.append("give", socketNode(stmt, "who", script), "id", numSocket(stmt, "itemId", script), "×", numSocket(stmt, "count", script));
   if (stmt.kind === "setBlock") row.append("set block", numSocket(stmt, "blockId", script), "at", socketNode(stmt, "pos", script));
   if (stmt.kind === "spawnDrop") row.append("drop id", numSocket(stmt, "itemId", script), "×", numSocket(stmt, "count", script), "at", socketNode(stmt, "pos", script));
@@ -1523,7 +1582,14 @@ function stmtNode(stmt, script, depth) {
 }
 function hat(color, kids, script) {
   const row = bindDrop(el("div", { class: "sb sb-hat", style: "--sb:" + color + ";z-index:50" }), { script, place: "start" });
-  kids.forEach((kid) => row.append(kid));
+  const title = el("div", { class: "hat-title" });
+  const values = el("div", { class: "hat-values" });
+  kids.forEach((kid) => {
+    if (kid && kid.classList && kid.classList.contains("reporter")) values.append(kid);
+    else title.append(kid);
+  });
+  row.append(title);
+  if (values.childNodes.length) row.append(values);
   return row;
 }
 function scriptBox(hatNode, body, script, rec) {
@@ -1542,6 +1608,12 @@ function paletteStack(action) {
   return bindDrag(el("div", { class: "sb sb-stack", style: "--sb:" + action[3], role: "button", onclick: () => {
     if (!didDrag) placeNew(action[0], spawnPos());
   } }, [action[1]]), { type: "palette", kind: action[0] });
+}
+function paletteBlockAt() {
+  return bindDrag(el("span", {
+    class: "reporter", role: "button", title: "Drop into a number slot",
+    onclick: () => { if (!didDrag) note("Drop this into a number slot."); }
+  }, ["block id at"]), { type: "var", value: { expr: "block", pos: null } });
 }
 function paletteMath(row) {
   return bindDrag(el("span", {
@@ -1567,6 +1639,7 @@ function render() {
     bits.push(paletteHat("#ff6680", "define my block", { type: "hat", hat: "service" }, () => dropHat({ hat: "service" }, spawnPos())));
     FEATURE_EVENTS.forEach(([id, labelText]) => bits.push(paletteHat("#0fbd8c", "when " + labelText, { type: "hat", hat: "feature", event: id }, () => dropHat({ hat: "feature", event: id }, spawnPos()))));
   }
+  if (cat === "sensing") bits.push(paletteBlockAt());
   if (cat === "math") MATH.forEach((row) => bits.push(paletteMath(row)));
   ACTIONS.filter((a) => a[2] === cat).forEach((a) => bits.push(paletteStack(a)));
   fly.replaceChildren(...bits);
